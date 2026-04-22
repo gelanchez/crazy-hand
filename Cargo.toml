@@ -1,0 +1,6 @@
+[workspace]
+members = ["driver", "gui"]
+resolver = "3"
+
+[workspace.dependencies]
+iceoryx2 = "0.8.1"

@@ -1,0 +1,9 @@
+[package]
+name = "driver"
+version = "0.0.1"
+edition = "2024"
+authors = ["José Ángel"]
+repository = "https://github.com/gelanchez/crazyflie-tfm"
+
+[dependencies]
+iceoryx2 = { workspace = true }

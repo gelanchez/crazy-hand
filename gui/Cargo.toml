@@ -1,0 +1,12 @@
+[package]
+name = "gui"
+version = "0.0.1"
+edition = "2024"
+authors = ["José Ángel"]
+repository = "https://github.com/gelanchez/crazyflie-tfm"
+description = "GUI interface for the CrazyFlie"
+
+[dependencies]
+iceoryx2 = { workspace = true }
+eframe = "0.34.1"
+egui_extras = "0.34.1"
