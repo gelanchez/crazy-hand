@@ -690,6 +690,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "control"
+version = "0.0.1"
+dependencies = [
+ "iceoryx2",
+]
+
+[[package]]
 name = "core-foundation"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -822,13 +829,6 @@ name = "dpi"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
-
-[[package]]
-name = "driver"
-version = "0.0.1"
-dependencies = [
- "iceoryx2",
-]
 
 [[package]]
 name = "ecolor"

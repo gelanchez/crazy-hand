@@ -21,6 +21,7 @@ fn main() -> eframe::Result {
             egui_extras::install_image_loaders(&cc.egui_ctx);
             Ok(Box::new(Gui {
                 show_about: false,
+                show_shortcuts: false,
                 save_images: false,
                 is_connected: false,
                 battery: 0.0,
@@ -31,6 +32,7 @@ fn main() -> eframe::Result {
 
 struct Gui {
     show_about: bool,
+    show_shortcuts: bool,
     save_images: bool,
     is_connected: bool,
     battery: f32,
@@ -39,10 +41,35 @@ struct Gui {
 impl eframe::App for Gui {
     // TODO: Read from iceoryx2 SHM
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // Global shortcuts
+        if ui.input_mut(|i| {
+            i.consume_shortcut(&egui::KeyboardShortcut::new(
+                egui::Modifiers::CTRL,
+                egui::Key::Q,
+            ))
+        }) {
+            std::process::exit(0);
+        }
+
+        self.top_bar(ui);
+        self.right_panel(ui);
+        self.central_panel(ui);
+
+        self.show_about_window(ui.ctx());
+        self.show_shortcuts_window(ui.ctx());
+        self.handle_keys(ui);
+    }
+}
+
+impl Gui {
+    fn top_bar(&mut self, ui: &mut egui::Ui) {
         egui::Panel::top("menu_bar").show_inside(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button("App", |ui| {
-                    if ui.button("❌ Quit").clicked() {
+                    if ui
+                        .add(egui::Button::new("❌ Quit").shortcut_text("Ctrl+Q"))
+                        .clicked()
+                    {
                         std::process::exit(0);
                     }
                 });
@@ -61,6 +88,10 @@ impl eframe::App for Gui {
                     });
 
                 ui.menu_button("Help", |ui| {
+                    if ui.button("⌨ Keyboard shortcuts").clicked() {
+                        self.show_shortcuts = true;
+                        ui.close();
+                    }
                     if ui.button(format!("❓ About {}", GUI_NAME)).clicked() {
                         self.show_about = true;
                         ui.close();
@@ -68,7 +99,9 @@ impl eframe::App for Gui {
                 });
             });
         });
+    }
 
+    fn right_panel(&mut self, ui: &mut egui::Ui) {
         egui::Panel::right("right_panel")
             .resizable(false)
             .show_inside(ui, |ui| {
@@ -107,20 +140,24 @@ impl eframe::App for Gui {
                     );
                 });
             });
+    }
 
+    fn central_panel(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default().show_inside(ui, |ui| {
             ui.centered_and_justified(|ui| {
                 ui.label("No image");
             });
         });
+    }
 
+    fn show_about_window(&mut self, ctx: &egui::Context) {
         if self.show_about {
             egui::Window::new(format!("About {}", GUI_NAME))
                 .open(&mut self.show_about)
                 .pivot(egui::Align2::CENTER_CENTER)
                 .resizable(false)
                 .collapsible(false)
-                .show(ui.ctx(), |ui| {
+                .show(ctx, |ui| {
                     ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
                         ui.heading(GUI_NAME);
                         ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
@@ -131,5 +168,80 @@ impl eframe::App for Gui {
                     });
                 });
         }
+    }
+
+    fn show_shortcuts_window(&mut self, ctx: &egui::Context) {
+        if self.show_shortcuts {
+            egui::Window::new("⌨ Keyboard Shortcuts")
+                .open(&mut self.show_shortcuts)
+                .pivot(egui::Align2::CENTER_CENTER)
+                .resizable(false)
+                .collapsible(false)
+                .show(ctx, |ui| {
+                    egui::Grid::new("shortcuts_grid")
+                        .striped(true)
+                        .spacing([40.0, 8.0])
+                        .show(ui, |ui| {
+                            ui.strong("Action");
+                            ui.strong("Shortcut");
+                            ui.end_row();
+
+                            ui.label("Quit Application");
+                            ui.label("Ctrl + Q");
+                            ui.end_row();
+
+                            ui.label("Pitch Forward / Backward");
+                            ui.label("W / S  or  ⬆ / ⬇");
+                            ui.end_row();
+
+                            ui.label("Roll Left / Right");
+                            ui.label("A / D  or  ⬅ / ➡");
+                            ui.end_row();
+
+                            ui.label("Yaw Left / Right");
+                            ui.label("Q / E");
+                            ui.end_row();
+
+                            ui.label("Stop / Emergency");
+                            ui.label("Space / Backspace");
+                            ui.end_row();
+
+                            ui.separator();
+                            ui.separator();
+                            ui.end_row();
+
+                            ui.label("Increase Speed");
+                            ui.label("Increase Speed");
+                            ui.label("Hold SHIFT");
+                            ui.end_row();
+                        });
+                });
+        }
+    }
+
+    fn handle_keys(&self, ui: &egui::Ui) {
+        ui.input(|i| {
+            let is_fast = i.modifiers.shift;
+            let speed_suffix = if is_fast { " [FAST]" } else { "" };
+
+            for key in [
+                egui::Key::Q,
+                egui::Key::W,
+                egui::Key::E,
+                egui::Key::A,
+                egui::Key::S,
+                egui::Key::D,
+                egui::Key::Space,
+                egui::Key::Backspace,
+                egui::Key::ArrowUp,
+                egui::Key::ArrowDown,
+                egui::Key::ArrowLeft,
+                egui::Key::ArrowRight,
+            ] {
+                if i.key_pressed(key) {
+                    println!("{:?} pressed{}", key, speed_suffix);
+                }
+            }
+        });
     }
 }

@@ -1,5 +1,5 @@
 [workspace]
-members = ["driver", "gui"]
+members = ["control", "gui"]
 resolver = "3"
 
 [workspace.dependencies]
