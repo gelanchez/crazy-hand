@@ -51,6 +51,15 @@ impl eframe::App for Gui {
             std::process::exit(0);
         }
 
+        if ui.input_mut(|i| {
+            i.consume_shortcut(&egui::KeyboardShortcut::new(
+                egui::Modifiers::CTRL,
+                egui::Key::S,
+            ))
+        }) {
+            self.save_images = !self.save_images;
+        }
+
         self.top_bar(ui);
         self.right_panel(ui);
         self.central_panel(ui);
@@ -108,21 +117,32 @@ impl Gui {
                 // DRONE CONTROL
                 ui.vertical_centered_justified(|ui| {
                     if ui
-                        .button(RichText::new("Take off ⬆").color(Color32::LIGHT_GREEN))
+                        .add_sized(
+                            [ui.available_width(), 30.0],
+                            egui::Button::new(
+                                RichText::new("Take off ⬆").color(Color32::LIGHT_GREEN),
+                            ),
+                        )
                         .on_hover_text("Take off the drone")
                         .clicked()
                     {
                         // TODO: TAKE-OFF
                     }
+                    ui.add_space(4.0);
                     if ui
-                        .button(RichText::new("Land ⬇").color(Color32::LIGHT_RED))
+                        .add_sized(
+                            [ui.available_width(), 30.0],
+                            egui::Button::new(RichText::new("Land ⬇").color(Color32::LIGHT_RED)),
+                        )
                         .on_hover_text("Land the drone")
                         .clicked()
                     {
                         // TODO LAND
                     }
                 });
+                ui.add_space(5.0);
                 ui.separator();
+                ui.add_space(5.0);
 
                 // TELEMETRY
                 let (text, color) = if self.is_connected {
@@ -130,14 +150,18 @@ impl Gui {
                 } else {
                     ("NOT CONNECTED", Color32::RED)
                 };
-                ui.colored_label(color, text);
-                ui.horizontal(|ui| {
-                    ui.label("Battery:");
-                    ui.add(
-                        egui::ProgressBar::new(self.battery / 100.0)
-                            .text(format!("{:.1}%", self.battery))
-                            .corner_radius(1.0),
-                    );
+
+                ui.vertical_centered(|ui| {
+                    ui.colored_label(color, text);
+                    ui.add_space(5.0);
+                    ui.horizontal(|ui| {
+                        ui.label("Battery:");
+                        ui.add(
+                            egui::ProgressBar::new(self.battery / 100.0)
+                                .text(format!("{:.1}%", self.battery))
+                                .corner_radius(1.0),
+                        );
+                    });
                 });
             });
     }
@@ -190,6 +214,10 @@ impl Gui {
                             ui.label("Ctrl + Q");
                             ui.end_row();
 
+                            ui.label("Toggle Save Images");
+                            ui.label("Ctrl + S");
+                            ui.end_row();
+
                             ui.label("Pitch Forward / Backward");
                             ui.label("W / S  or  ⬆ / ⬇");
                             ui.end_row();
@@ -206,11 +234,6 @@ impl Gui {
                             ui.label("Space / Backspace");
                             ui.end_row();
 
-                            ui.separator();
-                            ui.separator();
-                            ui.end_row();
-
-                            ui.label("Increase Speed");
                             ui.label("Increase Speed");
                             ui.label("Hold SHIFT");
                             ui.end_row();
