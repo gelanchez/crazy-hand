@@ -4,3 +4,6 @@ target
 
 # Rustfmt backup files
 **/*.rs.bk
+
+# Thesis files
+thesis/
