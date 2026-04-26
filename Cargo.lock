@@ -702,14 +702,14 @@ dependencies = [
 
 [[package]]
 name = "control"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "iceoryx2",
  "rand 0.10.1",
- "shared",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "types",
 ]
 
 [[package]]
@@ -1505,15 +1505,15 @@ dependencies = [
 
 [[package]]
 name = "gui"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "eframe",
  "egui",
  "egui_extras",
  "iceoryx2",
- "shared",
  "tracing",
  "tracing-subscriber",
+ "types",
 ]
 
 [[package]]
@@ -3369,13 +3369,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "shared"
-version = "0.0.1"
-dependencies = [
- "iceoryx2",
-]
-
-[[package]]
 name = "shlex"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3871,6 +3864,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb30dbbd9036155e74adad6812e9898d03ec374946234fbcebd5dfc7b9187b90"
 dependencies = [
  "rustc-hash 2.1.2",
+]
+
+[[package]]
+name = "types"
+version = "0.0.1"
+dependencies = [
+ "iceoryx2",
 ]
 
 [[package]]

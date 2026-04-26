@@ -4,8 +4,8 @@ mod ipc;
 use app::{App, GuiData};
 use iceoryx2::config::Config;
 use iceoryx2::prelude::{FilePath, SemanticString};
-use shared::{IMAGE_HEIGHT, IMAGE_WIDTH};
 use std::sync::{Arc, Mutex};
+use types::{IMAGE_HEIGHT, IMAGE_WIDTH};
 
 const WINDOW_WIDTH: f32 = IMAGE_WIDTH as f32 + 215.0;
 const WINDOW_HEIGHT: f32 = IMAGE_HEIGHT as f32 + 100.0;
@@ -19,7 +19,7 @@ fn main() -> eframe::Result {
     let config_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
-        .join("shared/iceoryx2.toml");
+        .join("types/iceoryx2.toml");
     let file_path =
         FilePath::new(config_path.to_str().unwrap().as_bytes()).expect("Invalid config path");
     if let Err(e) = Config::setup_global_config_from_file(&file_path) {

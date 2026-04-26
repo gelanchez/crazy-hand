@@ -1,19 +1,16 @@
+//! Stub that simulates the Crazyflie drone.
+//! Replace with real crazyflie-lib-rs calls when integrating hardware.
+//!
+//! Runs as a tokio task, sending image frames and telemetry at a fixed 1 Hz
+//! rate and forwarding incoming commands to the drone setpoint API (TODO).
+
 use rand::RngExt;
-/// Stub that simulates the Crazyflie drone.
-/// Replace with real crazyflie-lib-rs calls when integrating hardware.
-///
-/// Runs as a tokio task. Sends DroneData at variable intervals (50–200 ms)
-/// to mimic the drone's asynchronous log delivery, and drains incoming
-/// commands to print them (future: forward to drone setpoint API).
-use shared::Command;
-use shared::IMAGE_SIZE;
-use shared::{ImageFrame, Telemetry};
 use tokio::sync::mpsc;
 use tokio::time::Duration;
+use types::{Command, IMAGE_SIZE, ImageFrame, Telemetry};
 
 const SIMULATED_IMAGE_RATE_HZ: u64 = 1;
 
-// TODO Why this one doesn't have the command but the GuiData does? Is it because the mspc tx and rx channels?
 /// Data produced by the drone and forwarded to the IPC thread.
 pub struct DroneData {
     pub image: Option<ImageFrame>,

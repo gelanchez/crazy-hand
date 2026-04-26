@@ -1,8 +1,8 @@
 use eframe::egui;
 use egui::{Color32, TextureHandle, TextureOptions};
-use shared::{Command, IMAGE_HEIGHT, IMAGE_WIDTH, Telemetry};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
+use types::{Command, IMAGE_HEIGHT, IMAGE_WIDTH, Telemetry};
 
 pub const GUI_NAME: &str = "crazyflie-gui";
 
@@ -11,7 +11,7 @@ pub struct GuiData {
     pub image: Option<Vec<u8>>,
     pub telemetry: Telemetry,
     pub last_telemetry_time: Instant,
-    pub last_image_time: Instant,
+    pub last_image_time: Option<Instant>,
     pub command: Option<Command>,
 }
 
@@ -21,7 +21,7 @@ impl Default for GuiData {
             image: None,
             telemetry: Telemetry::default(),
             last_telemetry_time: Instant::now(),
-            last_image_time: Instant::now(),
+            last_image_time: None,
             command: None,
         }
     }
@@ -46,6 +46,10 @@ pub struct App {
     command_counter: u64,
     base_sensitivity: f32,
     turbo_sensitivity: f32,
+    thrust_up: f32,
+    thrust_up_turbo: f32,
+    thrust_down: f32,
+    thrust_down_turbo: f32,
 }
 
 impl App {
@@ -67,11 +71,28 @@ impl App {
             command_counter: 0,
             base_sensitivity: 0.4,
             turbo_sensitivity: 1.0,
+            thrust_up: 0.7,
+            thrust_up_turbo: 1.0,
+            thrust_down: 0.3,
+            thrust_down_turbo: 0.0,
         }
     }
 
     fn send_command(&self, cmd: Command) {
         self.gui_data.lock().unwrap().command = Some(cmd);
+    }
+
+    fn send_action(&mut self, action: types::Action) {
+        self.command_counter += 1;
+        self.send_command(Command {
+            id: self.command_counter,
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+            action,
+            ..Default::default()
+        });
     }
 
     fn top_bar(&mut self, ui: &mut egui::Ui) {
@@ -134,10 +155,7 @@ impl App {
                         .on_hover_text("CUT POWER IMMEDIATELY (Backspace)")
                         .clicked()
                     {
-                        self.send_command(Command {
-                            action: shared::Action::EmergencyStop,
-                            ..Default::default()
-                        });
+                        self.send_action(types::Action::EmergencyStop);
                         self.is_flying = false;
                     }
 
@@ -151,10 +169,7 @@ impl App {
                             .on_hover_text("Take off the drone")
                             .clicked()
                         {
-                            self.send_command(Command {
-                                action: shared::Action::Takeoff,
-                                ..Default::default()
-                            });
+                            self.send_action(types::Action::Takeoff);
                             self.is_flying = true;
                         }
                         // LAND
@@ -163,10 +178,7 @@ impl App {
                             .on_hover_text("Land the drone")
                             .clicked()
                         {
-                            self.send_command(Command {
-                                action: shared::Action::Land,
-                                ..Default::default()
-                            });
+                            self.send_action(types::Action::Land);
                             self.is_flying = false;
                         }
                     });
@@ -336,80 +348,81 @@ impl App {
         }
     }
 
-    fn handle_keys(&mut self, ui: &egui::Ui) {
+    fn handle_keys(&mut self, ui: &egui::Ui) -> (bool, bool) {
         ui.input(|i| {
-            // Sensitivity multiplier
             let sensitivity = if i.modifiers.shift {
                 self.turbo_sensitivity
             } else {
                 self.base_sensitivity
             };
 
-            // WASD -> Pitch & Roll
-            // Pitch (Forward/Backward)
+            let mut any_key = false;
+            let mut action_sent = false;
+
             if i.key_down(egui::Key::W) {
                 self.pitch = sensitivity;
+                any_key = true;
             } else if i.key_down(egui::Key::S) {
                 self.pitch = -sensitivity;
+                any_key = true;
             } else {
                 self.pitch = 0.0;
             }
 
-            // Roll (Left/Right)
             if i.key_down(egui::Key::D) {
                 self.roll = sensitivity;
+                any_key = true;
             } else if i.key_down(egui::Key::A) {
                 self.roll = -sensitivity;
+                any_key = true;
             } else {
                 self.roll = 0.0;
             }
 
-            // Arrow Keys -> Yaw & Thrust
-            // Yaw (Rotation)
             if i.key_down(egui::Key::ArrowRight) || i.key_down(egui::Key::E) {
                 self.yaw = sensitivity;
+                any_key = true;
             } else if i.key_down(egui::Key::ArrowLeft) || i.key_down(egui::Key::Q) {
                 self.yaw = -sensitivity;
+                any_key = true;
             } else {
                 self.yaw = 0.0;
             }
 
-            // Thrust (Up/Down)
-            // Note: Thrust is 0..1, so we use a neutral "hover" point of 0.5 for keyboard control
-            if i.key_down(egui::Key::ArrowUp) {
-                self.thrust = 0.5 + (sensitivity * 0.5);
-            } else if i.key_down(egui::Key::ArrowDown) {
-                self.thrust = 0.5 - (sensitivity * 0.5);
+            let (thrust_up, thrust_down) = if i.modifiers.shift {
+                (self.thrust_up_turbo, self.thrust_down_turbo)
             } else {
-                self.thrust = 0.0; // In a real drone, you'd likely maintain hover thrust
+                (self.thrust_up, self.thrust_down)
+            };
+            if i.key_down(egui::Key::ArrowUp) {
+                self.thrust = thrust_up;
+                any_key = true;
+            } else if i.key_down(egui::Key::ArrowDown) {
+                self.thrust = thrust_down;
+                any_key = true;
+            } else {
+                self.thrust = 0.0;
             }
 
-            // Spacebar -> Toggle Takeoff / Land
             if i.key_pressed(egui::Key::Space) {
                 if !self.is_flying {
-                    self.send_command(Command {
-                        action: shared::Action::Takeoff,
-                        ..Default::default()
-                    });
+                    self.send_action(types::Action::Takeoff);
                     self.is_flying = true;
                 } else {
-                    self.send_command(Command {
-                        action: shared::Action::Land,
-                        ..Default::default()
-                    });
+                    self.send_action(types::Action::Land);
                     self.is_flying = false;
                 }
+                action_sent = true;
             }
 
-            // Backspace -> Emergency Stop
             if i.key_pressed(egui::Key::Backspace) {
-                self.send_command(Command {
-                    action: shared::Action::EmergencyStop,
-                    ..Default::default()
-                });
+                self.send_action(types::Action::EmergencyStop);
                 self.is_flying = false;
+                action_sent = true;
             }
-        });
+
+            (any_key, action_sent)
+        })
     }
 
     fn show_config_window(&mut self, ctx: &egui::Context) {
@@ -420,16 +433,56 @@ impl App {
                 .resizable(false)
                 .collapsible(false)
                 .show(ctx, |ui| {
-                    ui.add(
-                        egui::Slider::new(&mut self.base_sensitivity, 0.1..=1.0)
-                            .text("Base Sens.")
-                            .max_decimals(1),
-                    );
-                    ui.add(
-                        egui::Slider::new(&mut self.turbo_sensitivity, 0.1..=1.0)
-                            .text("Turbo Sens.")
-                            .max_decimals(1),
-                    );
+                    egui::Grid::new("settings_grid")
+                        .num_columns(2)
+                        .spacing([8.0, 6.0])
+                        .show(ui, |ui| {
+                            ui.label("Thrust up");
+                            ui.add(
+                                egui::Slider::new(&mut self.thrust_up, 0.0..=1.0).max_decimals(2),
+                            );
+                            ui.end_row();
+
+                            ui.label("Thrust up (turbo)");
+                            ui.add(
+                                egui::Slider::new(&mut self.thrust_up_turbo, self.thrust_up..=1.0)
+                                    .max_decimals(2),
+                            );
+                            ui.end_row();
+
+                            ui.label("Thrust down");
+                            ui.add(
+                                egui::Slider::new(&mut self.thrust_down, 0.0..=1.0).max_decimals(2),
+                            );
+                            ui.end_row();
+
+                            ui.label("Thrust down (turbo)");
+                            ui.add(
+                                egui::Slider::new(
+                                    &mut self.thrust_down_turbo,
+                                    0.0..=self.thrust_down,
+                                )
+                                .max_decimals(2),
+                            );
+                            ui.end_row();
+
+                            ui.label("Pitch / Roll / Yaw");
+                            ui.add(
+                                egui::Slider::new(&mut self.base_sensitivity, 0.1..=1.0)
+                                    .max_decimals(2),
+                            );
+                            ui.end_row();
+
+                            ui.label("Pitch / Roll / Yaw (turbo)");
+                            ui.add(
+                                egui::Slider::new(
+                                    &mut self.turbo_sensitivity,
+                                    self.base_sensitivity..=2.0,
+                                )
+                                .max_decimals(2),
+                            );
+                            ui.end_row();
+                        });
                 });
         }
     }
@@ -447,16 +500,15 @@ impl eframe::App for App {
             std::process::exit(0);
         }
 
-        // Texture Update logic
+        // Update local state from shared data.
         let image_data = {
             let mut data = self.gui_data.lock().unwrap();
-            if let Some(pixels) = data.image.take() {
-                self.image_connected = true;
-                self.telemetry = data.telemetry;
-                Some(pixels)
-            } else {
-                None
-            }
+            self.telemetry = data.telemetry;
+            self.image_connected = data
+                .last_image_time
+                .map(|t| t.elapsed() < Duration::from_secs(1))
+                .unwrap_or(false);
+            data.image.take()
         };
 
         if let Some(pixels) = image_data {
@@ -480,23 +532,9 @@ impl eframe::App for App {
         self.show_about_window(ui.ctx());
         self.show_shortcuts_window(ui.ctx());
         self.show_config_window(ui.ctx());
-        self.handle_keys(ui);
+        let (any_movement, action_sent) = self.handle_keys(ui);
 
-        // Continuous Command Send
-        let any_key = ui.input(|i| {
-            i.key_down(egui::Key::W)
-                || i.key_down(egui::Key::S)
-                || i.key_down(egui::Key::A)
-                || i.key_down(egui::Key::D)
-                || i.key_down(egui::Key::Q)
-                || i.key_down(egui::Key::E)
-                || i.key_down(egui::Key::ArrowUp)
-                || i.key_down(egui::Key::ArrowDown)
-                || i.key_down(egui::Key::ArrowLeft)
-                || i.key_down(egui::Key::ArrowRight)
-        });
-
-        if any_key {
+        if any_movement && !action_sent {
             self.command_counter += 1;
             self.send_command(Command {
                 id: self.command_counter,
@@ -508,7 +546,7 @@ impl eframe::App for App {
                 pitch: self.pitch,
                 roll: self.roll,
                 yaw: self.yaw,
-                action: shared::Action::None,
+                action: types::Action::None,
                 ..Default::default()
             });
             ui.ctx().request_repaint();

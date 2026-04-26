@@ -1,6 +1,6 @@
 [package]
 name = "control"
-version = "0.0.1"
+version = "0.1.0"
 edition = "2024"
 authors = ["José Ángel"]
 repository = "https://github.com/gelanchez/crazyflie-tfm"
@@ -11,5 +11,5 @@ iceoryx2 = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-shared = { workspace = true }
+types = { workspace = true }
 rand = { workspace = true }

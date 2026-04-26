@@ -1,6 +1,6 @@
 [package]
 name = "gui"
-version = "0.0.1"
+version = "0.1.0"
 edition = "2024"
 authors = ["José Ángel"]
 repository = "https://github.com/gelanchez/crazyflie-tfm"
@@ -11,6 +11,6 @@ eframe = { workspace = true }
 egui = { workspace = true }
 egui_extras = { workspace = true }
 iceoryx2 = { workspace = true }
-shared = { workspace = true }
+types = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

@@ -31,8 +31,8 @@ impl std::fmt::Debug for ImageFrame {
     }
 }
 
-// Drone telemetry snapshot.
-#[derive(Clone, Copy, ZeroCopySend)]
+/// Drone telemetry snapshot.
+#[derive(Clone, Copy, Default, ZeroCopySend)]
 #[repr(C)]
 pub struct Telemetry {
     /// Voltage of the battery (V).
@@ -45,18 +45,6 @@ pub struct Telemetry {
     pub connected: bool,
     /// Explicit padding to avoid undefined layout.
     pub _pad: [u8; 4],
-}
-
-impl Default for Telemetry {
-    fn default() -> Self {
-        Self {
-            battery_voltage: 0.0,
-            battery_percentage: 0.0,
-            rssi: 0.0,
-            connected: false,
-            _pad: [0; 4],
-        }
-    }
 }
 
 impl std::fmt::Debug for Telemetry {

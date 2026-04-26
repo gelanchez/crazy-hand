@@ -4,10 +4,11 @@ mod ipc;
 use drone::DroneData;
 use iceoryx2::config::Config;
 use iceoryx2::prelude::{FilePath, SemanticString};
-use shared::Command;
 use tokio::sync::mpsc;
+use types::Command;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
         .init();
@@ -16,7 +17,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
-        .join("shared/iceoryx2.toml");
+        .join("types/iceoryx2.toml");
     let file_path =
         FilePath::new(config_path.to_str().unwrap().as_bytes()).expect("Invalid config path");
     if let Err(e) = Config::setup_global_config_from_file(&file_path) {
@@ -34,7 +35,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    tokio::runtime::Runtime::new()?.block_on(drone::run(drone_data_tx, command_rx))?;
+    drone::run(drone_data_tx, command_rx).await?;
 
     Ok(())
 }

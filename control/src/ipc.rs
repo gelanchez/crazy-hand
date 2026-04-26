@@ -1,10 +1,13 @@
 use crate::drone::DroneData;
 use iceoryx2::prelude::*;
-use shared::{
+use std::time::Duration;
+use tokio::sync::mpsc;
+use types::{
     COMMAND_EVENT, COMMAND_SERVICE, Command, IMAGE_EVENT, IMAGE_SERVICE, ImageFrame,
     TELEMETRY_EVENT, TELEMETRY_SERVICE, Telemetry,
 };
-use tokio::sync::mpsc;
+
+const DRONE_DATA_POLL_INTERVAL: Duration = Duration::from_millis(16);
 
 pub fn run(
     mut drone_data_rx: mpsc::Receiver<DroneData>,
@@ -64,10 +67,9 @@ pub fn run(
 
     tracing::info!("IPC ready");
 
-    // TODO Compare both IPC implementations and understand their implementation
     loop {
-        // Block up to 16 ms waiting for an incoming command notification.
-        // Parameter order: closure first, then timeout.
+        // Block up to DRONE_DATA_POLL_INTERVAL waiting for a command, then fall
+        // through to drain drone_data_rx — tokio mpsc can't join the waitset directly.
         waitset.wait_and_process_once_with_timeout(
             |id| {
                 if id.has_event_from(&command_guard) {
@@ -80,8 +82,7 @@ pub fn run(
                 }
                 CallbackProgression::Continue
             },
-            // TODO Why 16 ms?
-            std::time::Duration::from_millis(16),
+            DRONE_DATA_POLL_INTERVAL,
         )?;
 
         // Drain everything the drone task produced since the last iteration.

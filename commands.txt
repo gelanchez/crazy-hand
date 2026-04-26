@@ -1,0 +1,1 @@
+zip -r project.zip . -x "project.zip""target/*" ".claude-*" ".git/*"

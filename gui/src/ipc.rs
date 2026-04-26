@@ -1,11 +1,13 @@
 use crate::app::GuiData;
 use iceoryx2::prelude::*;
-use shared::{
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use types::{
     COMMAND_EVENT, COMMAND_SERVICE, Command, IMAGE_EVENT, IMAGE_SERVICE, ImageFrame,
     TELEMETRY_EVENT, TELEMETRY_SERVICE, Telemetry,
 };
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+
+const COMMAND_FLUSH_INTERVAL: Duration = Duration::from_millis(16);
 
 pub fn run(
     gui_data: Arc<Mutex<GuiData>>,
@@ -63,9 +65,8 @@ pub fn run(
     // Guards for inbounds
     let image_guard = waitset.attach_notification(&image_listener)?;
     let telemetry_guard = waitset.attach_notification(&telemetry_listener)?;
-    // TODO Magic number, why 16 ms?
-    // 16 ms tick to flush pending command without starving the receive path.
-    let command_tick = waitset.attach_interval(Duration::from_millis(16))?;
+    // Periodic tick to flush pending commands without starving the receive path.
+    let command_tick = waitset.attach_interval(COMMAND_FLUSH_INTERVAL)?;
 
     tracing::info!("[gui] IPC ready");
 
@@ -77,7 +78,7 @@ pub fn run(
                 // New image arrived.
                 if id.has_event_from(&image_guard) {
                     while image_listener.try_wait_one().unwrap().is_some() {}
-            // Drain the buffer; keep only the latest frame, log any gaps.
+                    // Drain the buffer; keep only the latest frame, log any gaps.
                     let mut latest: Option<(u64, u64, Vec<u8>)> = None;
                     while let Some(sample) = image_subscriber.receive().unwrap() {
                         latest = Some((sample.id, sample.timestamp, sample.pixels.to_vec()));
@@ -89,13 +90,13 @@ pub fn run(
                                 tracing::warn!("Dropped {gap} image frame(s) (id {previous_id} → {id})");
                             }
                         }
-                        tracing::info!("Image received: ImageFrame {{ id: {id}, timestamp: {timestamp}, pixels: [u8; {}] }}", shared::IMAGE_SIZE);
+                        tracing::info!("Image received: ImageFrame {{ id: {id}, timestamp: {timestamp}, pixels: [u8; {}] }}", types::IMAGE_SIZE);
                         last_image_id = Some(id);
                         // TODO send timestamp and id to GUI
                         // TODO Calculate instantaneous and average framerate and send it to GUI
                         let mut data = gui_data.lock().unwrap();
                         data.image = Some(pixels);
-                        data.last_image_time = std::time::Instant::now();
+                        data.last_image_time = Some(std::time::Instant::now());
                         ctx.request_repaint();
                     }
                 }
@@ -112,7 +113,6 @@ pub fn run(
                     }
                 }
 
-                // TODO Why?
                 // Periodic command flush.
                 if id.has_event_from(&command_tick) {
                     let cmd = gui_data.lock().unwrap().command.take();
@@ -129,7 +129,7 @@ pub fn run(
                 }
                 CallbackProgression::Continue
             },
-            Duration::from_millis(16),
+            COMMAND_FLUSH_INTERVAL,
         )?;
     }
 }

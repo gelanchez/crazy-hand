@@ -1,10 +1,10 @@
 [package]
-name = "shared"
+name = "types"
 version = "0.0.1"
 edition = "2024"
 authors = ["José Ángel"]
 repository = "https://github.com/gelanchez/crazyflie-tfm"
-description = "Shared code for the CrazyFlie system"
+description = "Types for the CrazyFlie system"
 
 [dependencies]
 iceoryx2 = { workspace = true }
