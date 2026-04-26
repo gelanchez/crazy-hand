@@ -9,6 +9,7 @@ pub const GUI_NAME: &str = "crazyflie-gui";
 /// Shared state between the GUI and the IPC thread.
 pub struct GuiData {
     pub image: Option<Vec<u8>>,
+    pub fps: f32,
     pub telemetry: Telemetry,
     pub last_telemetry_time: Instant,
     pub last_image_time: Option<Instant>,
@@ -19,6 +20,7 @@ impl Default for GuiData {
     fn default() -> Self {
         Self {
             image: None,
+            fps: 0.0,
             telemetry: Telemetry::default(),
             last_telemetry_time: Instant::now(),
             last_image_time: None,
@@ -38,6 +40,7 @@ pub struct App {
     save_images: bool,
     telemetry: Telemetry,
     image_connected: bool,
+    fps: f32,
     thrust: f32,
     pitch: f32,
     roll: f32,
@@ -63,6 +66,7 @@ impl App {
             save_images: false,
             telemetry: Telemetry::default(),
             image_connected: false,
+            fps: 0.0,
             thrust: 0.0,
             pitch: 0.0,
             roll: 0.0,
@@ -138,7 +142,7 @@ impl App {
 
     fn right_panel(&mut self, ui: &mut egui::Ui) {
         egui::Panel::right("right_panel")
-            .default_size(220.0)
+            .default_size(170.0)
             .resizable(false)
             .show_inside(ui, |ui| {
                 ui.vertical_centered(|ui| {
@@ -183,7 +187,7 @@ impl App {
                         }
                     });
 
-                    ui.add_space(10.0);
+                    ui.add_space(8.0);
 
                     ui.add(
                         egui::Slider::new(&mut self.thrust, 0.0..=1.0)
@@ -207,49 +211,46 @@ impl App {
                     );
                 });
 
-                ui.add_space(10.0);
+                ui.add_space(8.0);
                 ui.separator();
-                ui.add_space(5.0);
+                ui.add_space(8.0);
 
-                ui.vertical(|ui| {
-                    // LINK STATUS
-                    ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                        let (c_text, c_color) = if self.telemetry.connected {
-                            ("CONTROL LINK: OK", Color32::GREEN)
-                        } else {
-                            ("CONTROL LINK: LOST", Color32::RED)
-                        };
-                        ui.colored_label(c_color, c_text);
+                // TELEMETRY & CONNECTION
+                let is_connected = self.image_connected && self.telemetry.connected;
 
-                        let (v_text, v_color) = if self.image_connected {
-                            ("VIDEO LINK: OK", Color32::GREEN)
-                        } else {
-                            ("VIDEO LINK: LOST", Color32::RED)
-                        };
-                        ui.colored_label(v_color, v_text);
-                    });
+                let t = if is_connected {
+                    self.telemetry
+                } else {
+                    Telemetry::default()
+                };
 
-                    ui.add_space(10.0);
+                egui::Grid::new("telemetry_grid")
+                    .num_columns(2)
+                    .spacing([8.0, 4.0])
+                    .show(ui, |ui| {
+                        ui.label("Rate:");
+                        ui.label(format!(
+                            "{:.1} FPS",
+                            if is_connected { self.fps } else { 0.0 }
+                        ));
+                        ui.end_row();
 
-                    // TELEMETRY
-                    let t = if self.telemetry.connected {
-                        self.telemetry
-                    } else {
-                        Telemetry::default()
-                    };
-
-                    ui.horizontal(|ui| {
                         ui.label("Battery:");
                         ui.add(
                             egui::ProgressBar::new(t.battery_percentage / 100.0)
-                                .text(format!("{:.1}%", t.battery_percentage))
+                                .text(format!("{:.0}%", t.battery_percentage))
                                 .corner_radius(1.0),
                         );
+                        ui.end_row();
+
+                        ui.label("Voltage:");
+                        ui.label(format!("{:.2} V", t.battery_voltage));
+                        ui.end_row();
+
+                        ui.label("RSSI:");
+                        ui.label(format!("{:.0} dBm", t.rssi));
+                        ui.end_row();
                     });
-                    ui.add_space(5.0);
-                    ui.label(format!("Voltage: {:.2} V", t.battery_voltage));
-                    ui.label(format!("Signal: {:.0} dBm", t.rssi));
-                });
             });
     }
 
@@ -500,16 +501,17 @@ impl eframe::App for App {
             std::process::exit(0);
         }
 
-        // Update local state from shared data.
-        let image_data = {
+        let (image_data, fps) = {
             let mut data = self.gui_data.lock().unwrap();
             self.telemetry = data.telemetry;
             self.image_connected = data
                 .last_image_time
                 .map(|t| t.elapsed() < Duration::from_secs(1))
                 .unwrap_or(false);
-            data.image.take()
+            (data.image.take(), data.fps)
         };
+
+        self.fps = fps;
 
         if let Some(pixels) = image_data {
             let color_image = egui::ColorImage::from_gray([IMAGE_WIDTH, IMAGE_HEIGHT], &pixels);

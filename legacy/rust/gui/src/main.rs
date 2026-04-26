@@ -7,8 +7,8 @@ use iceoryx2::prelude::{FilePath, SemanticString};
 use std::sync::{Arc, Mutex};
 use types::{IMAGE_HEIGHT, IMAGE_WIDTH};
 
-const WINDOW_WIDTH: f32 = IMAGE_WIDTH as f32 + 215.0;
-const WINDOW_HEIGHT: f32 = IMAGE_HEIGHT as f32 + 100.0;
+const WINDOW_WIDTH: f32 = IMAGE_WIDTH as f32 + 220.0;
+const WINDOW_HEIGHT: f32 = IMAGE_HEIGHT as f32 + 80.0;
 
 fn main() -> eframe::Result {
     tracing_subscriber::fmt()

@@ -1,5 +1,6 @@
 mod drone;
 mod ipc;
+mod wifi_link;
 
 use drone::DroneData;
 use iceoryx2::config::Config;

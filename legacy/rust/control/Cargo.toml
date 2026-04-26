@@ -13,3 +13,8 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 types = { workspace = true }
 rand = { workspace = true }
+crazyflie-lib = { workspace = true }
+crazyflie-link = { workspace = true }
+async-trait = { workspace = true }
+flume = { workspace = true }
+byteorder = { workspace = true }

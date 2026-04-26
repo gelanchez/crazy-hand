@@ -12,3 +12,11 @@ types = { path = "types" }
 tokio = { version = "1.52.1", features = ["full"] }
 tracing = "0.1.44"
 tracing-subscriber = "0.3.23"
+crazyflie-lib = { path = "../../PUBLIC/crazyflie-lib-rs" }
+crazyflie-link = { path = "../../PUBLIC/crazyflie-link-rs/crazyflie-link" }
+async-trait = "0.1"
+flume = "0.11"
+byteorder = "1.5"
+
+[patch.crates-io]
+crazyflie-link = { path = "../../PUBLIC/crazyflie-link-rs/crazyflie-link" }

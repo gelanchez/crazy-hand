@@ -8,6 +8,8 @@ use types::{
 };
 
 const COMMAND_FLUSH_INTERVAL: Duration = Duration::from_millis(16);
+const FPS_WINDOW_SIZE: usize = 10;
+const FPS_TIMEOUT_SECS: f32 = 3.0;
 
 pub fn run(
     gui_data: Arc<Mutex<GuiData>>,
@@ -71,6 +73,7 @@ pub fn run(
     tracing::info!("[gui] IPC ready");
 
     let mut last_image_id: Option<u64> = None;
+    let mut frame_intervals: std::collections::VecDeque<f32> = std::collections::VecDeque::with_capacity(FPS_WINDOW_SIZE);
 
     loop {
         waitset.wait_and_process_once_with_timeout(
@@ -92,11 +95,29 @@ pub fn run(
                         }
                         tracing::info!("Image received: ImageFrame {{ id: {id}, timestamp: {timestamp}, pixels: [u8; {}] }}", types::IMAGE_SIZE);
                         last_image_id = Some(id);
-                        // TODO send timestamp and id to GUI
-                        // TODO Calculate instantaneous and average framerate and send it to GUI
+
                         let mut data = gui_data.lock().unwrap();
+                        let now = std::time::Instant::now();
+                        
+                        // Calculate Moving Average FPS
+                        if let Some(last_time) = data.last_image_time {
+                            let dt = now.duration_since(last_time).as_secs_f32();
+                            // If gap is too large, reset history to avoid dragging down the average slowly
+                            if dt > FPS_TIMEOUT_SECS {
+                                frame_intervals.clear();
+                            }
+                            if dt > 0.0 {
+                                frame_intervals.push_back(dt);
+                                if frame_intervals.len() > FPS_WINDOW_SIZE {
+                                    frame_intervals.pop_front();
+                                }
+                                let avg_dt: f32 = frame_intervals.iter().sum::<f32>() / frame_intervals.len() as f32;
+                                data.fps = 1.0 / avg_dt;
+                            }
+                        }
+                        
                         data.image = Some(pixels);
-                        data.last_image_time = Some(std::time::Instant::now());
+                        data.last_image_time = Some(now);
                         ctx.request_repaint();
                     }
                 }
@@ -113,9 +134,22 @@ pub fn run(
                     }
                 }
 
-                // Periodic command flush.
+                // Periodic command flush & stall detection.
                 if id.has_event_from(&command_tick) {
-                    let cmd = gui_data.lock().unwrap().command.take();
+                    let mut data = gui_data.lock().unwrap();
+                    
+                    // Stall detection: if no images for a while, drop FPS to 0
+                    if let Some(last_image) = data.last_image_time {
+                        if last_image.elapsed().as_secs_f32() > FPS_TIMEOUT_SECS {
+                            if data.fps > 0.0 {
+                                data.fps = 0.0;
+                                frame_intervals.clear();
+                                ctx.request_repaint();
+                            }
+                        }
+                    }
+
+                    let cmd = data.command.take();
                     if let Some(command) = cmd {
                         tracing::info!("Command sent: {:?}", command);
                         command_pub
