@@ -7,3 +7,20 @@ target
 
 # Thesis files
 thesis/
+
+# Python venv
+.venv/
+
+# VSCode
+.vscode/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+data/
+
+ground_station/
+legacy/
+output.txt
