@@ -1,0 +1,8 @@
+# Build directory
+build/
+
+# Firmware objects
+**/*.o
+**/*.cmd
+**/*.a
+*.elf

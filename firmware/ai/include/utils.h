@@ -1,0 +1,88 @@
+/**
+ * @file utils.h
+ * @brief Utils functions.
+ */
+
+#ifndef __UTILS_H__
+#define __UTILS_H__
+
+#include "cpx.h" // CPX communications
+#include "pmsis.h"
+#include <stdint.h>
+
+// QVGA format = 324 x 244 (extra 4 is from padding)
+#ifdef QVGA_MODE
+#define IMG_WIDTH 324
+#define IMG_HEIGHT 244
+#endif
+
+// QQVGA = 164 x 124 (extra 4 is from padding)
+#ifdef QQVGA_MODE
+#define IMG_WIDTH 164
+#define IMG_HEIGHT 124
+#endif
+
+// Custom 324 x 324 (extra 4 is from padding)
+#if !defined(QVGA_MODE) && !defined(QQVGA_MODE)
+#define IMG_WIDTH 324
+#define IMG_HEIGHT 324
+#endif
+
+#define IMG_SIZE (IMG_WIDTH * IMG_HEIGHT)
+
+// Camera himax.h not included when compiling for FreeRTOS
+// gap_sdk/rtos/pmsis/bsp/include/bsp/camera/himax.h
+#define HIMAX_IMG_ORIENTATION 0x0101
+#define HIMAX_QVGA_WIN_EN 0x3010
+#define HIMAX_VSYNC_HSYNC_PIXEL_SHIFT_EN 0x1012
+
+typedef struct {
+  uint8_t magic;
+  uint16_t width;
+  uint16_t height;
+  uint8_t depth;
+  uint8_t format;
+  uint32_t size;
+} __attribute__((packed)) img_header_t;
+
+typedef enum {
+  RAW_FORMAT = 0,
+  JPEG_FORMAT = 1
+} __attribute__((packed)) ImageFormat_t;
+
+typedef enum {
+  WIFI_CTRL_SET_SSID = 0x10,
+  WIFI_CTRL_SET_KEY = 0x11,
+
+  WIFI_CTRL_WIFI_CONNECT = 0x20,
+
+  WIFI_CTRL_STATUS_WIFI_CONNECTED =
+      0x31, // CF connected to access point (I think)
+  WIFI_CTRL_STATUS_CLIENT_CONNECTED =
+      0x32, // Client connected to AI-deck via WiFi
+} __attribute__((packed)) WiFiCTRLType_t;
+
+typedef struct {
+  WiFiCTRLType_t cmd;
+  uint8_t data[50];
+} __attribute__((packed)) WiFiCTRLPacket_t;
+
+void createImageHeaderPacket(CPXPacket_t *packet, uint32_t imgSize,
+                             ImageFormat_t imgFormat);
+
+int setup_camera(struct pi_device *device);
+
+void sendBufferViaCPX(CPXPacket_t *packet, uint8_t *buffer,
+                      uint32_t bufferSize);
+
+void setupWiFi(CPXPacket_t *txPacket);
+
+void transferJpegImage(CPXPacket_t *txPacket, uint32_t imgSize,
+                       uint8_t *jpegData, uint32_t jpegSize,
+                       uint8_t *headerData, uint32_t headerSize,
+                       uint8_t *footerData, uint32_t footerSize);
+
+void transferRawImage(CPXPacket_t *txPacket, uint32_t imgSize,
+                      uint8_t *buff_img);
+
+#endif
