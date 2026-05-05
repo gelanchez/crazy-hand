@@ -7,6 +7,7 @@ import click
 import numpy as np
 import iceoryx2
 import logging
+import signal
 
 from common.payloads import ImageData, CommandData
 from common.constants import (
@@ -138,7 +139,7 @@ class GuiNode(QThread):
                     del data, sample
                     sample = None
                     self.image_received.emit(pixels)
-        except iceoryx2.NodeWaitFailure:
+        except (iceoryx2.NodeWaitFailure, iceoryx2.ListenerWaitError):
             pass
         except Exception as e:
             logger.error(f"{NODE_NAME} run error: {e}", exc_info=True)
@@ -394,15 +395,22 @@ def main():
         logger.error("No display available (DISPLAY/WAYLAND_DISPLAY not set)")
         sys.exit(1)
 
+    app = QApplication(sys.argv[:1])
+
+    def signal_handler(sig, frame):
+        logger.info("Interrupt received, shutting down...")
+        app.quit()
+
+    signal.signal(signal.SIGINT, signal_handler)
+
     try:
-        app = QApplication(sys.argv[:1])
         window = MainWindow()
         window.show()
         sys.exit(app.exec())
-    except KeyboardInterrupt:
-        pass
-    except BrokenPipeError:
-        pass
+    except Exception as e:
+        logger.error(f"GUI error: {e}")
+    finally:
+        logger.info(f"{NODE_NAME} shut down")
 
 
 if __name__ == "__main__":

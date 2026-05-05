@@ -5,6 +5,7 @@ import io
 import struct
 import time
 import threading
+import signal
 import click
 import subprocess
 import platform
@@ -210,6 +211,9 @@ class WifiNode:
             == 0
         )
 
+    def _signal_handler(self, sig, frame):
+        self._running = False
+
     def run(self):
         logger.info(f"{NODE_NAME} running")
 
@@ -235,6 +239,9 @@ class WifiNode:
         self.image_notifier = self.image_event.notifier_builder().create()
         self.image_ready_event = iceoryx2.EventId.new(EventId.IMAGE_READY)
 
+        self._running = True
+        signal.signal(signal.SIGINT, self._signal_handler)
+
         try:
             frame_id = 0
 
@@ -243,8 +250,11 @@ class WifiNode:
                 _y = np.arange(IMAGE_HEIGHT, dtype=np.uint16).reshape(-1, 1)
                 _x = np.arange(IMAGE_WIDTH, dtype=np.uint16).reshape(1, -1)
 
-                while True:
+                while self._running:
                     self.node.wait(iceoryx2.Duration.from_millis(1000))
+                    
+                    if not self._running:
+                        break
 
                     # Loan unitialized sample from the publisher's memory pool
                     sample = self.image_publisher.loan_uninit()
@@ -308,20 +318,25 @@ class WifiNode:
                 ).start()
                 logger.info("Receiving frames via polling thread...")
 
-                while True:
-                    time.sleep(1.0)  # Use time.sleep to ensure GIL is released
+                while self._running:
+                    time.sleep(0.5)
 
-        except (iceoryx2.NodeWaitFailure, KeyboardInterrupt):
-            try:
-                logger.info(f"{NODE_NAME} shutting down...")
-            except Exception:
-                pass
+        except (iceoryx2.NodeWaitFailure, iceoryx2.ListenerWaitError, KeyboardInterrupt):
+            pass
+        finally:
             self._running = False
             if not self.sim and hasattr(self, "cf"):
                 try:
+                    # Closing the link can sometimes trigger internal cflib errors 
+                    # during shutdown if threads are still reading. We try to be quiet.
                     self.cf.close_link()
                 except Exception:
                     pass
+            
+            try:
+                logger.info(f"{NODE_NAME} shut down")
+            except Exception:
+                pass
 
 
 @click.command()

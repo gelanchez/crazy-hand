@@ -49,45 +49,37 @@ def main(sim):
         while True:
             for process in processes:
                 if process.poll() is not None:
-                    logger.error(
-                        f"Node {process.args} terminated unexpectedly with code {process.returncode}"
-                    )
+                    if process.returncode in (0, -signal.SIGINT, -signal.SIGTERM):
+                        logger.info(f"Node {process.args[-1]} finished.")
+                    else:
+                        logger.error(
+                            f"Node {process.args[-1]} terminated unexpectedly with code {process.returncode}"
+                        )
                     raise KeyboardInterrupt
-            time.sleep(1)
+            time.sleep(0.5)
 
     except KeyboardInterrupt:
-        try:
-            logger.info("Terminating all nodes...")
-        except BrokenPipeError:
-            pass
+        logger.info("Terminating all nodes...")
 
+        # Send SIGINT to all process groups
         for process in processes:
             try:
                 os.killpg(os.getpgid(process.pid), signal.SIGINT)
             except Exception:
                 pass
 
+        # Wait for processes to exit gracefully
         for process in processes:
             try:
-                process.wait(timeout=5)
+                process.wait(timeout=3)
             except subprocess.TimeoutExpired:
+                logger.warning(f"Node {process.args} did not terminate in time, killing...")
                 try:
                     os.killpg(os.getpgid(process.pid), signal.SIGKILL)
                 except Exception:
                     pass
 
-        try:
-            logger.info("Client shutdown complete.")
-        except BrokenPipeError:
-            pass
-        finally:
-            # Prevent "Exception ignored in: <_io.TextIOWrapper ...>" on interpreter shutdown
-            try:
-                devnull = os.open(os.devnull, os.O_WRONLY)
-                os.dup2(devnull, sys.stdout.fileno())
-                os.dup2(devnull, sys.stderr.fileno())
-            except Exception:
-                pass
+        logger.info("Client shutdown complete.")
 
 
 if __name__ == "__main__":

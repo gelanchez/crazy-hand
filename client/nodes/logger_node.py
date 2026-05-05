@@ -3,6 +3,7 @@
 import time
 import logging
 import iceoryx2
+import signal
 from common.payloads import ImageData
 from common.constants import ServiceName, EventId, IMAGE_WIDTH, IMAGE_HEIGHT
 from common.utils import setup_logging, setup_iceoryx2_config
@@ -18,7 +19,11 @@ logger = setup_logging(NODE_NAME, level=logging.INFO)
 class LoggerNode:
     def __init__(self):
         setup_iceoryx2_config()
+        self._running = True
         logger.info(f"{NODE_NAME} initialized")
+
+    def _signal_handler(self, sig, frame):
+        self._running = False
 
     def run(self):
         logger.info(f"{NODE_NAME} running")
@@ -56,11 +61,15 @@ class LoggerNode:
         self.image_listener = self.image_event.listener_builder().create()
         self.image_ready_event = iceoryx2.EventId.new(EventId.IMAGE_READY)
 
+        signal.signal(signal.SIGINT, self._signal_handler)
+
         try:
             IMAGES_PATH.mkdir(parents=True, exist_ok=True)
 
-            while True:
-                event_id = self.image_listener.blocking_wait_one()
+            while self._running:
+                event_id = self.image_listener.timed_wait_one(
+                    iceoryx2.Duration.from_millis(500)
+                )
                 
                 if event_id == self.image_ready_event:
                     sample = self.image_subscriber.receive()
@@ -80,8 +89,10 @@ class LoggerNode:
                         logger.debug(f"Saved {data.contents}")
                         del data, sample
 
-        except (iceoryx2.NodeWaitFailure, KeyboardInterrupt):
+        except (iceoryx2.NodeWaitFailure, iceoryx2.ListenerWaitError, KeyboardInterrupt):
             pass
+        finally:
+            logger.info(f"{NODE_NAME} shut down")
 
 
 def main():
