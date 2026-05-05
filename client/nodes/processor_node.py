@@ -4,7 +4,7 @@ import time
 import logging
 import iceoryx2
 from common.payloads import ImageData
-from common.constants import IMAGE_SERVICE, EventId
+from common.constants import ServiceName, EventId
 from common.utils import setup_logging, setup_iceoryx2_config
 
 NODE_NAME = "processor_node"
@@ -30,7 +30,7 @@ class ProcessorNode:
         while True:
             try:
                 self.image_service = (
-                    self.node.service_builder(iceoryx2.ServiceName.new(IMAGE_SERVICE))
+                    self.node.service_builder(iceoryx2.ServiceName.new(ServiceName.IMAGE))
                     .publish_subscribe(ImageData)
                     .open_or_create()
                 )
@@ -43,7 +43,7 @@ class ProcessorNode:
         while True:
             try:
                 self.image_event = (
-                    self.node.service_builder(iceoryx2.ServiceName.new(IMAGE_SERVICE))
+                    self.node.service_builder(iceoryx2.ServiceName.new(ServiceName.IMAGE))
                     .event()
                     .open_or_create()
                 )
@@ -52,7 +52,7 @@ class ProcessorNode:
                 time.sleep(0.1)
         logger.info("Image event connected")
         self.image_listener = self.image_event.listener_builder().create()
-        self.image_ready_event = iceoryx2.EventId.new(EventId.IMAGE_READY_EVENT.value)
+        self.image_ready_event = iceoryx2.EventId.new(EventId.IMAGE_READY)
 
         try:
             while True:

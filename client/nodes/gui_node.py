@@ -6,15 +6,16 @@ import time
 import click
 import numpy as np
 import iceoryx2
+import logging
 
 from common.payloads import ImageData, CommandData
 from common.constants import (
-    IMAGE_SERVICE, COMMAND_SERVICE, EventId,
+    ServiceName,
+    EventId,
     IMAGE_HEIGHT, IMAGE_WIDTH,
     SPEED_FACTOR, DEFAULT_HEIGHT,
 )
 from common.utils import setup_logging, setup_iceoryx2_config
-
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -31,7 +32,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from PySide6.QtCore import Qt, QTimer, Signal, Slot, QThread
-from enum import Enum
+from enum import StrEnum
 from PySide6.QtGui import QAction, QFont, QImage, QPixmap
 
 NODE_NAME = "gui_node"
@@ -48,12 +49,10 @@ _SHORTCUTS = {
     "W / S":    "Altitude up / down",
 }
 
-import logging
-
 logger = setup_logging(NODE_NAME, logging.DEBUG)
 
 
-class DroneStatus(Enum):
+class DroneStatus(StrEnum):
     INITIALIZING = "Initializing..."
     WAITING = "Waiting for services..."
     CONNECTED = "Connected — receiving frames"
@@ -77,12 +76,12 @@ class GuiNode(QThread):
             .create(iceoryx2.ServiceType.Ipc)
         )
 
-        self.status_changed.emit(DroneStatus.WAITING.value)
+        self.status_changed.emit(DroneStatus.WAITING)
         logger.info("Waiting for image service...")
         while not self.isInterruptionRequested():
             try:
                 self.image_service = (
-                    self.node.service_builder(iceoryx2.ServiceName.new(IMAGE_SERVICE))
+                    self.node.service_builder(iceoryx2.ServiceName.new(ServiceName.IMAGE))
                     .publish_subscribe(ImageData)
                     .open_or_create()
                 )
@@ -99,7 +98,7 @@ class GuiNode(QThread):
         while not self.isInterruptionRequested():
             try:
                 self.image_event = (
-                    self.node.service_builder(iceoryx2.ServiceName.new(IMAGE_SERVICE))
+                    self.node.service_builder(iceoryx2.ServiceName.new(ServiceName.IMAGE))
                     .event()
                     .open_or_create()
                 )
@@ -111,10 +110,10 @@ class GuiNode(QThread):
             return
 
         logger.info("Image event connected")
-        self.status_changed.emit(DroneStatus.CONNECTED.value)
+        self.status_changed.emit(DroneStatus.CONNECTED)
 
         self.image_listener = self.image_event.listener_builder().create()
-        self.image_ready_event = iceoryx2.EventId.new(EventId.IMAGE_READY_EVENT.value)
+        self.image_ready_event = iceoryx2.EventId.new(EventId.IMAGE_READY)
 
         sample = None
         try:
@@ -142,9 +141,9 @@ class GuiNode(QThread):
         except iceoryx2.NodeWaitFailure:
             pass
         except Exception as e:
-            logger.error(f"GuiNode run error: {e}", exc_info=True)
+            logger.error(f"{NODE_NAME} run error: {e}", exc_info=True)
 
-        self.status_changed.emit(DroneStatus.DISCONNECTED.value)
+        self.status_changed.emit(DroneStatus.DISCONNECTED)
 
 
 class ShortcutsDialog(QDialog):
@@ -197,18 +196,18 @@ class MainWindow(QMainWindow):
                 .create(iceoryx2.ServiceType.Ipc)
             )
             _cmd_svc = (
-                self._cmd_node.service_builder(iceoryx2.ServiceName.new(COMMAND_SERVICE))
+                self._cmd_node.service_builder(iceoryx2.ServiceName.new(ServiceName.COMMAND))
                 .publish_subscribe(CommandData)
                 .open_or_create()
             )
             self._cmd_publisher = _cmd_svc.publisher_builder().create()
             _cmd_evt = (
-                self._cmd_node.service_builder(iceoryx2.ServiceName.new(COMMAND_SERVICE))
+                self._cmd_node.service_builder(iceoryx2.ServiceName.new(ServiceName.COMMAND))
                 .event()
                 .open_or_create()
             )
             self._cmd_notifier = _cmd_evt.notifier_builder().create()
-            self._cmd_ready_event = iceoryx2.EventId.new(EventId.COMMAND_READY_EVENT.value)
+            self._cmd_ready_event = iceoryx2.EventId.new(EventId.COMMAND_READY)
             logger.info("Command publisher ready")
         except Exception as e:
             logger.warning(f"Command publisher unavailable: {e}")
@@ -222,7 +221,7 @@ class MainWindow(QMainWindow):
         self.gui_node.start()
 
         # Status bar
-        self.statusBar().showMessage(DroneStatus.INITIALIZING.value)
+        self.statusBar().showMessage(DroneStatus.INITIALIZING)
 
         # Dialogs (pre-created to avoid first-open delay)
         self._shortcuts_dialog = ShortcutsDialog(self)

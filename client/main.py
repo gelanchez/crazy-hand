@@ -24,7 +24,7 @@ def main(sim):
 
     processes = []
     nodes = [
-        "nodes.control_node",
+        "nodes.wifi_node",
         "nodes.processor_node",
         "nodes.logger_node",
         "nodes.gui_node",

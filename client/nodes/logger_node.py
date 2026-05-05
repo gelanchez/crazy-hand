@@ -4,7 +4,7 @@ import time
 import logging
 import iceoryx2
 from common.payloads import ImageData
-from common.constants import IMAGE_SERVICE, EventId, IMAGE_WIDTH, IMAGE_HEIGHT
+from common.constants import ServiceName, EventId, IMAGE_WIDTH, IMAGE_HEIGHT
 from common.utils import setup_logging, setup_iceoryx2_config
 from PIL import Image
 from pathlib import Path
@@ -22,7 +22,6 @@ class LoggerNode:
 
     def run(self):
         logger.info(f"{NODE_NAME} running")
-        # TODO Config file or env
         self.node = (
             iceoryx2.NodeBuilder.new()
             .name(iceoryx2.NodeName.new(NODE_NAME))
@@ -33,7 +32,7 @@ class LoggerNode:
         while True:
             try:
                 self.image_service = (
-                    self.node.service_builder(iceoryx2.ServiceName.new(IMAGE_SERVICE))
+                    self.node.service_builder(iceoryx2.ServiceName.new(ServiceName.IMAGE))
                     .publish_subscribe(ImageData)
                     .open_or_create()
                 )
@@ -46,7 +45,7 @@ class LoggerNode:
         while True:
             try:
                 self.image_event = (
-                    self.node.service_builder(iceoryx2.ServiceName.new(IMAGE_SERVICE))
+                    self.node.service_builder(iceoryx2.ServiceName.new(ServiceName.IMAGE))
                     .event()
                     .open_or_create()
                 )
@@ -55,7 +54,7 @@ class LoggerNode:
                 time.sleep(0.1)
         logger.info("Image event connected")
         self.image_listener = self.image_event.listener_builder().create()
-        self.image_ready_event = iceoryx2.EventId.new(EventId.IMAGE_READY_EVENT.value)
+        self.image_ready_event = iceoryx2.EventId.new(EventId.IMAGE_READY)
 
         try:
             IMAGES_PATH.mkdir(parents=True, exist_ok=True)

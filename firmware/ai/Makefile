@@ -2,8 +2,8 @@ ifndef GAP_SDK_HOME
   $(error Source sourceme in gap_sdk first)
 endif
 
-APP             = crazy-hand-control
-APP_CFLAGS 		+= -DAPP_NAME=\"CRAZY-HAND-CONTROL\"
+APP             = crazyflie-control
+APP_CFLAGS 		+= -DAPP_NAME=\"CRAZYFLIE-AI\"
 # io			= uart
 # io			= host
 

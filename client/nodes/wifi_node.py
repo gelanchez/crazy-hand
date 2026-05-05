@@ -12,15 +12,16 @@ import iceoryx2
 import numpy as np
 import queue
 import cflib.crtp
+import logging
+import logging
+
 from cflib.crazyflie import Crazyflie
 from cflib.cpx import CPXFunction
 from PIL import Image
-
 from common.constants import (
     CRAZYFLIE_IP,
     CRAZYFLIE_URI,
-    IMAGE_SERVICE,
-    COMMAND_SERVICE,
+    ServiceName,
     EventId,
     IMAGE_WIDTH,
     IMAGE_HEIGHT,
@@ -29,9 +30,7 @@ from common.constants import (
 from common.payloads import ImageData, CommandData
 from common.utils import setup_logging, setup_iceoryx2_config
 
-NODE_NAME = "control_node"
-
-import logging
+NODE_NAME = "wifi_node"
 
 logger = setup_logging(NODE_NAME, logging.DEBUG)
 
@@ -44,7 +43,7 @@ def _fill_sim_frame(
     image[:] = ((_x + _y + frame_id) % 256).astype(np.uint8)
 
 
-class ControlNode:
+class WifiNode:
     def __init__(self, sim=False):
         setup_iceoryx2_config()
         self.sim = sim
@@ -135,7 +134,7 @@ class ControlNode:
 
 
     def _command_loop(self) -> None:
-        command_ready_event = iceoryx2.EventId.new(EventId.COMMAND_READY_EVENT.value)
+        command_ready_event = iceoryx2.EventId.new(EventId.COMMAND_READY)
 
         # Wait for the command service (gui_node creates it)
         command_subscriber = None
@@ -143,13 +142,13 @@ class ControlNode:
         while self._running:
             try:
                 command_service = (
-                    self.node.service_builder(iceoryx2.ServiceName.new(COMMAND_SERVICE))
+                    self.node.service_builder(iceoryx2.ServiceName.new(ServiceName.COMMAND))
                     .publish_subscribe(CommandData)
                     .open_or_create()
                 )
                 command_subscriber = command_service.subscriber_builder().create()
                 command_event = (
-                    self.node.service_builder(iceoryx2.ServiceName.new(COMMAND_SERVICE))
+                    self.node.service_builder(iceoryx2.ServiceName.new(ServiceName.COMMAND))
                     .event()
                     .open()
                 )
@@ -215,7 +214,6 @@ class ControlNode:
         logger.info(f"{NODE_NAME} running")
 
         # iceoryx2 initialization
-        # TODO Config file or env
         self.node = (
             iceoryx2.NodeBuilder.new()
             .name(iceoryx2.NodeName.new(NODE_NAME))
@@ -223,19 +221,19 @@ class ControlNode:
         )
 
         self.image_service = (
-            self.node.service_builder(iceoryx2.ServiceName.new(IMAGE_SERVICE))
+            self.node.service_builder(iceoryx2.ServiceName.new(ServiceName.IMAGE))
             .publish_subscribe(ImageData)
             .open_or_create()
         )
         self.image_publisher = self.image_service.publisher_builder().create()
 
         self.image_event = (
-            self.node.service_builder(iceoryx2.ServiceName.new(IMAGE_SERVICE))
+            self.node.service_builder(iceoryx2.ServiceName.new(ServiceName.IMAGE))
             .event()
             .open_or_create()
         )
         self.image_notifier = self.image_event.notifier_builder().create()
-        self.image_ready_event = iceoryx2.EventId.new(EventId.IMAGE_READY_EVENT.value)
+        self.image_ready_event = iceoryx2.EventId.new(EventId.IMAGE_READY)
 
         try:
             frame_id = 0
@@ -315,7 +313,7 @@ class ControlNode:
 
         except (iceoryx2.NodeWaitFailure, KeyboardInterrupt):
             try:
-                logger.info("Control node shutting down...")
+                logger.info(f"{NODE_NAME} shutting down...")
             except Exception:
                 pass
             self._running = False
@@ -332,7 +330,7 @@ def main(sim):
     global logger
     logger = setup_logging(NODE_NAME, logging.DEBUG)
     
-    node = ControlNode(sim=sim)
+    node = WifiNode(sim=sim)
     node.run()
 
 
