@@ -12,7 +12,11 @@
 # We want to execute the main Makefile for the firmware project,
 # it will handle the build for us.
 #
-CRAZYFLIE_BASE := ~/git/PUBLIC/crazyflie-firmware
+CRAZYFLIE_BASE ?= $(HOME)/git/PUBLIC/crazyflie-firmware
+
+ifeq ("$(wildcard $(CRAZYFLIE_BASE))","")
+$(error CRAZYFLIE_BASE not found at $(CRAZYFLIE_BASE))
+endif
 
 #
 # We override the default OOT_CONFIG here, we could also name our config

@@ -35,14 +35,14 @@
  */
 void createImageHeaderPacket(CPXPacket_t *packet, uint32_t imgSize,
                              ImageFormat_t imgFormat) {
-  img_header_t *imgHeader = (img_header_t *)packet->data;
-  imgHeader->magic = 0xBC;
-  imgHeader->width = IMG_WIDTH;
-  imgHeader->height = IMG_HEIGHT;
-  imgHeader->depth = 1;
-  imgHeader->format = imgFormat;
-  imgHeader->size = imgSize;
-  packet->dataLength = sizeof(img_header_t); // As per CPX package
+    img_header_t *imgHeader = (img_header_t *)packet->data;
+    imgHeader->magic = 0xBC;
+    imgHeader->width = IMG_WIDTH;
+    imgHeader->height = IMG_HEIGHT;
+    imgHeader->depth = 1;
+    imgHeader->format = imgFormat;
+    imgHeader->size = imgSize;
+    packet->dataLength = sizeof(img_header_t); // As per CPX package
 }
 
 /**
@@ -57,53 +57,53 @@ void createImageHeaderPacket(CPXPacket_t *packet, uint32_t imgSize,
  * @return 0 on success, -1 on failure.
  */
 int setup_camera(struct pi_device *device) {
-  cpxPrintToConsole(LOG_TO_CRTP, "Opening Himax camera\n");
+    cpxPrintToConsole(LOG_TO_CRTP, "Opening Himax camera\n");
 
-  // Initialize camera configuration
-  struct pi_himax_conf camera_conf;
-  pi_himax_conf_init(&camera_conf);
+    // Initialize camera configuration
+    struct pi_himax_conf camera_conf;
+    pi_himax_conf_init(&camera_conf);
 #if defined(QVGA_MODE)
-  camera_conf.format = PI_CAMERA_QVGA; // QVGA
+    camera_conf.format = PI_CAMERA_QVGA; // QVGA
 #endif
 
-  // Open camera device
-  pi_open_from_conf(device, &camera_conf);
-  if (pi_camera_open(device)) {
-    cpxPrintToConsole(LOG_TO_CRTP, "Failed to open camera\n");
-    return -1;
-  }
+    // Open camera device
+    pi_open_from_conf(device, &camera_conf);
+    if (pi_camera_open(device)) {
+        cpxPrintToConsole(LOG_TO_CRTP, "Failed to open camera\n");
+        return -1;
+    }
 
-  // Start camera operation
-  pi_camera_control(device, PI_CAMERA_CMD_START, 0);
+    // Start camera operation
+    pi_camera_control(device, PI_CAMERA_CMD_START, 0);
 
-  uint8_t set_value;
-  uint8_t reg_value;
+    uint8_t set_value;
+    uint8_t reg_value;
 
-  // Rotate camera orientation
-  set_value = 3;
-  pi_camera_reg_set(device, HIMAX_IMG_ORIENTATION, &set_value);
-  pi_time_wait_us(1000000);
-  // vTaskDelay(M2T(1000))
-  pi_camera_reg_get(device, HIMAX_IMG_ORIENTATION, &reg_value);
-  if (set_value != reg_value) {
-    cpxPrintToConsole(LOG_TO_CRTP, "Failed to rotate camera image\n");
-    return -1;
-  }
-  cpxPrintToConsole(LOG_TO_CRTP, "Image orientation %d\n", reg_value);
+    // Rotate camera orientation
+    set_value = 3;
+    pi_camera_reg_set(device, HIMAX_IMG_ORIENTATION, &set_value);
+    pi_time_wait_us(1000000);
+    // vTaskDelay(M2T(1000))
+    pi_camera_reg_get(device, HIMAX_IMG_ORIENTATION, &reg_value);
+    if (set_value != reg_value) {
+        cpxPrintToConsole(LOG_TO_CRTP, "Failed to rotate camera image\n");
+        return -1;
+    }
+    cpxPrintToConsole(LOG_TO_CRTP, "Image orientation %d\n", reg_value);
 
-  // QVGA_MODE
+    // QVGA_MODE
 #ifdef QVGA_MODE
-  set_value = 1;
-  pi_camera_reg_set(device, HIMAX_QVGA_WIN_EN, &set_value);
-  pi_camera_reg_get(device, HIMAX_QVGA_WIN_EN, &reg_value);
-  cpxPrintToConsole(LOG_TO_CRTP, "QVGA window enabled %d\n", reg_value);
+    set_value = 1;
+    pi_camera_reg_set(device, HIMAX_QVGA_WIN_EN, &set_value);
+    pi_camera_reg_get(device, HIMAX_QVGA_WIN_EN, &reg_value);
+    cpxPrintToConsole(LOG_TO_CRTP, "QVGA window enabled %d\n", reg_value);
 #endif
 
-  // Stop camera operation and initialize auto exposure gain
-  pi_camera_control(device, PI_CAMERA_CMD_STOP, 0);
-  pi_camera_control(device, PI_CAMERA_CMD_AEG_INIT, 0);
+    // Stop camera operation and initialize auto exposure gain
+    pi_camera_control(device, PI_CAMERA_CMD_STOP, 0);
+    pi_camera_control(device, PI_CAMERA_CMD_AEG_INIT, 0);
 
-  return 0;
+    return 0;
 }
 
 /**
@@ -130,18 +130,18 @@ int setup_camera(struct pi_device *device) {
  */
 void sendBufferViaCPX(CPXPacket_t *packet, uint8_t *buffer,
                       uint32_t bufferSize) {
-  uint32_t offset = 0;
-  uint32_t size = 0;
-  do {
-    size = sizeof(packet->data);
-    if (offset + size > bufferSize) {
-      size = bufferSize - offset;
-    }
-    memcpy(packet->data, &buffer[offset], sizeof(packet->data));
-    packet->dataLength = size;
-    cpxSendPacketBlocking(packet);
-    offset += size;
-  } while (size == sizeof(packet->data));
+    uint32_t offset = 0;
+    uint32_t size = 0;
+    do {
+        size = sizeof(packet->data);
+        if (offset + size > bufferSize) {
+            size = bufferSize - offset;
+        }
+        memcpy(packet->data, &buffer[offset], sizeof(packet->data));
+        packet->dataLength = size;
+        cpxSendPacketBlocking(packet);
+        offset += size;
+    } while (size == sizeof(packet->data));
 }
 
 /**
@@ -167,28 +167,28 @@ void sendBufferViaCPX(CPXPacket_t *packet, uint8_t *buffer,
  * the application.
  */
 void setupWiFi(CPXPacket_t *txPacket) {
-  cpxPrintToConsole(LOG_TO_CRTP, "Setting up WiFi AP\n");
+    cpxPrintToConsole(LOG_TO_CRTP, "Setting up WiFi AP\n");
 
-  // Set up the routing for the WiFi CTRL packets
-  cpxInitRoute(CPX_T_GAP8, CPX_T_ESP32, CPX_F_WIFI_CTRL, &txPacket->route);
-  WiFiCTRLPacket_t *wifiCtrl =
-      (WiFiCTRLPacket_t *)
-          txPacket->data; // pointers to the same memory location
+    // Set up the routing for the WiFi CTRL packets
+    cpxInitRoute(CPX_T_GAP8, CPX_T_ESP32, CPX_F_WIFI_CTRL, &txPacket->route);
+    WiFiCTRLPacket_t *wifiCtrl =
+        (WiFiCTRLPacket_t *)
+            txPacket->data; // pointers to the same memory location
 
-  // SSID
-  wifiCtrl->cmd = WIFI_CTRL_SET_SSID;
-  const char ssid[] = APP_NAME;
-  memcpy(wifiCtrl->data, ssid, sizeof(ssid));
-  txPacket->dataLength = sizeof(ssid);
-  cpxSendPacketBlocking(txPacket);
+    // SSID
+    wifiCtrl->cmd = WIFI_CTRL_SET_SSID;
+    const char ssid[] = APP_NAME;
+    memcpy(wifiCtrl->data, ssid, sizeof(ssid));
+    txPacket->dataLength = sizeof(ssid);
+    cpxSendPacketBlocking(txPacket);
 
-  // TODO WiFi key
+    // TODO WiFi key
 
-  // Connect
-  wifiCtrl->cmd = WIFI_CTRL_WIFI_CONNECT;
-  wifiCtrl->data[0] = 0x01;
-  txPacket->dataLength = 2;
-  cpxSendPacketBlocking(txPacket);
+    // Connect
+    wifiCtrl->cmd = WIFI_CTRL_WIFI_CONNECT;
+    wifiCtrl->data[0] = 0x01;
+    txPacket->dataLength = 2;
+    cpxSendPacketBlocking(txPacket);
 }
 
 /**
@@ -214,22 +214,22 @@ void transferJpegImage(CPXPacket_t *txPacket, uint32_t imgSize,
                        uint8_t *jpegData, uint32_t jpegSize,
                        uint8_t *headerData, uint32_t headerSize,
                        uint8_t *footerData, uint32_t footerSize) {
-  // Send information about the image
-  createImageHeaderPacket(txPacket, imgSize, JPEG_FORMAT);
-  cpxSendPacketBlocking(txPacket);
+    // Send information about the image
+    createImageHeaderPacket(txPacket, imgSize, JPEG_FORMAT);
+    cpxSendPacketBlocking(txPacket);
 
-  // Send header
-  memcpy(txPacket->data, headerData, headerSize);
-  txPacket->dataLength = headerSize;
-  cpxSendPacketBlocking(txPacket);
+    // Send header
+    memcpy(txPacket->data, headerData, headerSize);
+    txPacket->dataLength = headerSize;
+    cpxSendPacketBlocking(txPacket);
 
-  // Send image data
-  sendBufferViaCPX(txPacket, jpegData, jpegSize);
+    // Send image data
+    sendBufferViaCPX(txPacket, jpegData, jpegSize);
 
-  // Send footer
-  memcpy(txPacket->data, footerData, footerSize);
-  txPacket->dataLength = footerSize;
-  cpxSendPacketBlocking(txPacket);
+    // Send footer
+    memcpy(txPacket->data, footerData, footerSize);
+    txPacket->dataLength = footerSize;
+    cpxSendPacketBlocking(txPacket);
 }
 
 /**
@@ -248,10 +248,10 @@ void transferJpegImage(CPXPacket_t *txPacket, uint32_t imgSize,
  */
 void transferRawImage(CPXPacket_t *txPacket, uint32_t imgSize,
                       uint8_t *buff_img) {
-  // Send information about the image
-  createImageHeaderPacket(txPacket, imgSize, RAW_FORMAT);
-  cpxSendPacketBlocking(txPacket);
+    // Send information about the image
+    createImageHeaderPacket(txPacket, imgSize, RAW_FORMAT);
+    cpxSendPacketBlocking(txPacket);
 
-  // Send the provided buffer
-  sendBufferViaCPX(txPacket, buff_img, imgSize);
+    // Send the provided buffer
+    sendBufferViaCPX(txPacket, buff_img, imgSize);
 }

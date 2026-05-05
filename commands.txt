@@ -1,4 +1,4 @@
-zip -r project.zip . -x "project.zip" "target/*" ".git/*" ".venv/*"
+zip -r project.zip . -x "project.zip" "target/*" ".git/*" ".venv/*" "client/data/*"
 
 unzip -o project.zip -d .
 

@@ -7,9 +7,9 @@ path=$1
 make_args="${@: 2}"
 
 full_path=${scriptDir}/../${path}
-cd ${full_path}
+cd "${full_path}"
 
 export GAPY_OPENOCD_CABLE=interface/ftdi/olimex-arm-usb-tiny-h.cfg
 #pip3 install numpy==1.22.3 # Avoid numpy error when compiling with other versions
 source /gap_sdk/configs/ai_deck.sh
-make ${make_args}
+make "${make_args}"

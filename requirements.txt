@@ -5,3 +5,4 @@ PySide6
 pillow
 cflib
 opencv-python
+cfclient

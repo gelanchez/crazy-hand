@@ -43,7 +43,7 @@ APP_LDFLAGS     =
 APP_LINK_SCRIPT =
 
 # Model
-include model.mk
+# include model.mk
 
 
 $(info APP_SRCS... $(APP_SRCS))

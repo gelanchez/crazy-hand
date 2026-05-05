@@ -27,8 +27,8 @@
 #define MTU (1022)
 
 typedef struct {
-  uint16_t len; // Of data (max 1022)
-  uint8_t data[MTU];
+    uint16_t len; // Of data (max 1022)
+    uint8_t data[MTU];
 } __attribute__((packed)) packet_t;
 
 /* Initialize the communication */

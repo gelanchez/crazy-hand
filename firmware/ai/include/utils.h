@@ -37,34 +37,34 @@
 #define HIMAX_VSYNC_HSYNC_PIXEL_SHIFT_EN 0x1012
 
 typedef struct {
-  uint8_t magic;
-  uint16_t width;
-  uint16_t height;
-  uint8_t depth;
-  uint8_t format;
-  uint32_t size;
+    uint8_t magic;
+    uint16_t width;
+    uint16_t height;
+    uint8_t depth;
+    uint8_t format;
+    uint32_t size;
 } __attribute__((packed)) img_header_t;
 
 typedef enum {
-  RAW_FORMAT = 0,
-  JPEG_FORMAT = 1
+    RAW_FORMAT = 0,
+    JPEG_FORMAT = 1
 } __attribute__((packed)) ImageFormat_t;
 
 typedef enum {
-  WIFI_CTRL_SET_SSID = 0x10,
-  WIFI_CTRL_SET_KEY = 0x11,
+    WIFI_CTRL_SET_SSID = 0x10,
+    WIFI_CTRL_SET_KEY = 0x11,
 
-  WIFI_CTRL_WIFI_CONNECT = 0x20,
+    WIFI_CTRL_WIFI_CONNECT = 0x20,
 
-  WIFI_CTRL_STATUS_WIFI_CONNECTED =
-      0x31, // CF connected to access point (I think)
-  WIFI_CTRL_STATUS_CLIENT_CONNECTED =
-      0x32, // Client connected to AI-deck via WiFi
+    WIFI_CTRL_STATUS_WIFI_CONNECTED =
+        0x31, // CF connected to access point (I think)
+    WIFI_CTRL_STATUS_CLIENT_CONNECTED =
+        0x32, // Client connected to AI-deck via WiFi
 } __attribute__((packed)) WiFiCTRLType_t;
 
 typedef struct {
-  WiFiCTRLType_t cmd;
-  uint8_t data[50];
+    WiFiCTRLType_t cmd;
+    uint8_t data[50];
 } __attribute__((packed)) WiFiCTRLPacket_t;
 
 void createImageHeaderPacket(CPXPacket_t *packet, uint32_t imgSize,
