@@ -22,6 +22,6 @@ def blackboard_float(key, default=0.0):
         default=ctypes.c_float(default),
     )
 
-CONTROL_CONFIG = {
+CONFIG = {
     "save_images": blackboard_bool(0, False),
 }

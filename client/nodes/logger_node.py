@@ -2,12 +2,14 @@ import logging
 import iceoryx2
 from client.common.payloads import ImageData
 from client.common.constants import ServiceName, EventId, IMAGE_WIDTH, IMAGE_HEIGHT
+from client.common.blackboards import CONFIG
 from client.common.node import Node
 from PIL import Image
 from pathlib import Path
 
 NODE_NAME = "logger_node"
 IMAGES_PATH = Path("./data/images")
+
 
 class LoggerNode(Node):
     def __init__(self, level=logging.INFO):
@@ -19,6 +21,10 @@ class LoggerNode(Node):
         if self.image_port.subscriber is None:
             return
 
+        self.blackboard_reader = self.create_blackboard_reader("/config", CONFIG)
+        if self.blackboard_reader is None:
+            return
+
         try:
             IMAGES_PATH.mkdir(parents=True, exist_ok=True)
 
@@ -27,8 +33,7 @@ class LoggerNode(Node):
                     iceoryx2.Duration.from_millis(500)
                 )
 
-                save_images = False
-                
+                save_images = self.blackboard_read(self.blackboard_reader, "save_images")                
                 if event_id == self.image_port.event and save_images:
                     sample = self.image_port.subscriber.receive()
                     if sample is not None:

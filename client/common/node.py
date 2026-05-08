@@ -133,40 +133,31 @@ class Node:
         iceoryx2.config.setup_global_config_from_file(iceoryx2.FilePath.new(str(Node.IOX2_CONFIG)))
 
     def create_blackboard_writer(self, name, entries) -> BlackboardPort:
-        """
-        Entries format:
+        builder = (
+            self.node.service_builder(iceoryx2.ServiceName.new(name))
+            .blackboard_creator(Node.BLACKBOARD_KEY_TYPE)
+        )
 
-        {
-            "kp": (
-                ctypes.c_uint64(0),
-                ctypes.c_float,
-                ctypes.c_float(1.0),
-            ),
-        }
-        """
-        builder = self.node.service_builder(iceoryx2.ServiceName.new(name)).blackboard_creator(Node.BLACKBOARD_KEY_TYPE)
-
-        for _, (key, _, default) in entries.items():
-            builder = builder.add(key, default)
+        for _, field in entries.items():
+            builder = builder.add(field.key, field.default)
 
         service = builder.create()
-        writer = service.writer_builder().create()
+        writer = service.writer_builder().create()    
+        blackboard_entries = {}
 
-        entries = {}
-
-        for entry_name, (key, value_type, _) in entries.items():
-            entries[entry_name] = BlackboardEntry(
-                key=key,
-                value_type=value_type,
-                entry=writer.entry(key, value_type),
+        for entry_name, field in entries.items():
+            blackboard_entries[entry_name] = BlackboardEntry(
+                key=field.key,
+                value_type=field.value_type,
+                entry=writer.entry(field.key, field.value_type),
             )
 
         self.logger.info(f"{name} blackboard writer created")
-        return BlackboardPort(service=service, port=writer, entries=entries)
+        return BlackboardPort(service=service, port=writer, entries=blackboard_entries)
 
     def create_blackboard_reader(self, name, entries, check_interruption=lambda: False) -> BlackboardPort | None:
         def should_stop():
-            return not self.running or check_interruption()
+            return (not self.running or check_interruption())
 
         service = None
 
@@ -178,31 +169,36 @@ class Node:
                     .open()
                 )
                 break
-
             except Exception:
                 time.sleep(0.1)
 
         if service is None:
             return None
 
-        reader = service.reader_builder().create()
-        entries = {}
+        reader = service.reader_builder().create()    
+        blackboard_entries = {}
 
-        for entry_name, (key, value_type, _) in entries.items():
-            entries[entry_name] = BlackboardEntry(
-                key=key,
-                value_type=value_type,
-                entry=reader.entry(key, value_type),
+        for entry_name, field in entries.items():
+            blackboard_entries[entry_name] = BlackboardEntry(
+                key=field.key,
+                value_type=field.value_type,
+                entry=reader.entry(field.key, field.value_type),
             )
 
         self.logger.info(f"{name} blackboard reader connected")
-        return BlackboardPort(service=service, port=reader, entries=entries)
+        return BlackboardPort(service=service, port=reader, entries=blackboard_entries)
 
     @staticmethod
     def blackboard_write(blackboard: BlackboardPort, entry_name: str, value):
-        blackboard.entries[entry_name].entry.update_with_copy(value)
+        if entry_name not in blackboard.entries:
+            raise KeyError(f"Unknown blackboard entry: {entry_name}")
+        blackboard_entry = blackboard.entries[entry_name]
+        ctypes_value = blackboard_entry.value_type(value)
+        blackboard_entry.entry.update_with_copy(ctypes_value)
 
     @staticmethod
     def blackboard_read(blackboard: BlackboardPort, entry_name: str):
+        if entry_name not in blackboard.entries:
+            raise KeyError(f"Unknown blackboard entry: {entry_name}")
         entry = blackboard.entries[entry_name]
         return entry.entry.get().decode_as(entry.value_type).value

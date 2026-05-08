@@ -16,6 +16,7 @@ from client.common.constants import (
     IMAGE_HEIGHT, IMAGE_WIDTH,
     SPEED_FACTOR, DEFAULT_HEIGHT,
 )
+from client.common.blackboards import CONFIG
 from client.common.utils import setup_logging
 from client.common.node import Node
 from PySide6.QtWidgets import (
@@ -149,6 +150,10 @@ class MainWindow(QMainWindow):
         self.ui_node = Node("gui_cmd", level=logging.DEBUG, handle_signals=False)
         self.gui_node = GuiNode()
 
+        # Writer first, then reader
+        self.blackboard_writer = self.gui_node.create_blackboard_writer("/config", CONFIG)
+        self.blackboard_reader = self.gui_node.create_blackboard_reader("/config", CONFIG)
+
         # Command publisher setup
         self._cmd_port = self.ui_node.create_publisher(ServiceName.COMMAND, CommandData, EventId.COMMAND_READY)
 
@@ -180,6 +185,14 @@ class MainWindow(QMainWindow):
         self.disconnect_action.setEnabled(False)
         connection_menu.addAction(self.connect_action)
         connection_menu.addAction(self.disconnect_action)
+
+        connection_menu.addSeparator()
+        save_images_enabled = self.gui_node.blackboard_read(self.blackboard_reader, "save_images")
+        self.save_images_action = QAction("Save images", self)
+        self.save_images_action.setCheckable(True)
+        self.save_images_action.setChecked(save_images_enabled)
+        self.save_images_action.toggled.connect(self._on_save_images_toggled)
+        connection_menu.addAction(self.save_images_action)
 
         help_menu = menu_bar.addMenu("Help")
         shortcuts_action = QAction("Keyboard Shortcuts", self)
@@ -225,7 +238,6 @@ class MainWindow(QMainWindow):
 
     def _show_about(self):
         project = self.project_config["project"]
-
         name = project["name"]
         version = project["version"]
         description = project["description"]
@@ -272,7 +284,10 @@ class MainWindow(QMainWindow):
             self._cmd_port.notifier.notify_with_custom_event_id(self._cmd_port.event)
         except Exception as e:
             logger.warning(f"Command publish failed: {e}")
-
+    
+    def _on_save_images_toggled(self, checked: bool):
+        self.gui_node.blackboard_write(self.blackboard_writer, "save_images", checked)
+        logger.info(f"Save images set to {checked}")
 
     def keyPressEvent(self, event):
         if event.isAutoRepeat():
