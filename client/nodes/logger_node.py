@@ -1,78 +1,36 @@
-
-
-import time
 import logging
 import iceoryx2
-import signal
-from common.payloads import ImageData
-from common.constants import ServiceName, EventId, IMAGE_WIDTH, IMAGE_HEIGHT
-from common.utils import setup_logging, setup_iceoryx2_config
+from client.common.payloads import ImageData
+from client.common.constants import ServiceName, EventId, IMAGE_WIDTH, IMAGE_HEIGHT
+from client.common.node import Node
 from PIL import Image
 from pathlib import Path
 
 NODE_NAME = "logger_node"
 IMAGES_PATH = Path("./data/images")
 
-logger = setup_logging(NODE_NAME, level=logging.INFO)
-
-
-class LoggerNode:
-    def __init__(self):
-        setup_iceoryx2_config()
-        self._running = True
-        logger.info(f"{NODE_NAME} initialized")
-
-    def _signal_handler(self, sig, frame):
-        self._running = False
+class LoggerNode(Node):
+    def __init__(self, level=logging.INFO):
+        super().__init__(NODE_NAME, level=level)
 
     def run(self):
-        logger.info(f"{NODE_NAME} running")
-        self.node = (
-            iceoryx2.NodeBuilder.new()
-            .name(iceoryx2.NodeName.new(NODE_NAME))
-            .create(iceoryx2.ServiceType.Ipc)
-        )
-
-        logger.info("Waiting for image service...")
-        while True:
-            try:
-                self.image_service = (
-                    self.node.service_builder(iceoryx2.ServiceName.new(ServiceName.IMAGE))
-                    .publish_subscribe(ImageData)
-                    .open_or_create()
-                )
-                break
-            except iceoryx2.PublishSubscribeOpenError:
-                time.sleep(0.1)
-        logger.info("Image service connected")
-        self.image_subscriber = self.image_service.subscriber_builder().create()
-
-        while True:
-            try:
-                self.image_event = (
-                    self.node.service_builder(iceoryx2.ServiceName.new(ServiceName.IMAGE))
-                    .event()
-                    .open_or_create()
-                )
-                break
-            except Exception:
-                time.sleep(0.1)
-        logger.info("Image event connected")
-        self.image_listener = self.image_event.listener_builder().create()
-        self.image_ready_event = iceoryx2.EventId.new(EventId.IMAGE_READY)
-
-        signal.signal(signal.SIGINT, self._signal_handler)
+        self.image_port = self.create_subscriber(ServiceName.IMAGE, ImageData, EventId.IMAGE_READY)
+        
+        if self.image_port.subscriber is None:
+            return
 
         try:
             IMAGES_PATH.mkdir(parents=True, exist_ok=True)
 
-            while self._running:
-                event_id = self.image_listener.timed_wait_one(
+            while self.running:
+                event_id = self.image_port.listener.timed_wait_one(
                     iceoryx2.Duration.from_millis(500)
                 )
+
+                save_images = False
                 
-                if event_id == self.image_ready_event:
-                    sample = self.image_subscriber.receive()
+                if event_id == self.image_port.event and save_images:
+                    sample = self.image_port.subscriber.receive()
                     if sample is not None:
                         data = sample.payload()
                         image = Image.frombuffer(
@@ -86,13 +44,14 @@ class LoggerNode:
                         )
                         image_name = f"{data.contents.timestamp}.png"
                         image.save(IMAGES_PATH / image_name)
-                        logger.debug(f"Saved {data.contents}")
+                        self.logger.debug(f"Saved {data.contents}")
                         del data, sample
 
-        except (iceoryx2.NodeWaitFailure, iceoryx2.ListenerWaitError, KeyboardInterrupt):
+        except (iceoryx2.NodeWaitFailure, iceoryx2.ListenerWaitError):
             pass
+
         finally:
-            logger.info(f"{NODE_NAME} shut down")
+            self.logger.info(f"{NODE_NAME} shut down")
 
 
 def main():
@@ -102,4 +61,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -7,7 +7,7 @@ import subprocess
 import time
 import signal
 
-from common.utils import setup_logging
+from client.common.utils import setup_logging
 
 logger = setup_logging("main")
 
@@ -24,10 +24,11 @@ def main(sim):
 
     processes = []
     nodes = [
-        "nodes.wifi_node",
-        "nodes.processor_node",
-        "nodes.logger_node",
-        "nodes.gui_node",
+        "wifi_node",
+        "control_node",
+        "processor_node",
+        "logger_node",
+        "gui_node",
     ]
 
     try:
@@ -35,7 +36,7 @@ def main(sim):
         # Using start_new_session=True to handle signals correctly
         for node in nodes:
             logger.info(f"Launching {node}...")
-            args = [venv_python, "-m", node]
+            args = [venv_python, "-m", f"client.nodes.{node}"]
             if sim:
                 args.append("--sim")
 
@@ -49,11 +50,12 @@ def main(sim):
         while True:
             for process in processes:
                 if process.poll() is not None:
+                    node_cmd = " ".join(process.args)
                     if process.returncode in (0, -signal.SIGINT, -signal.SIGTERM):
-                        logger.info(f"Node {process.args[-1]} finished.")
+                        logger.info(f"Node '{node_cmd}' finished.")
                     else:
                         logger.error(
-                            f"Node {process.args[-1]} terminated unexpectedly with code {process.returncode}"
+                            f"Node '{node_cmd}' terminated unexpectedly with code {process.returncode}"
                         )
                     raise KeyboardInterrupt
             time.sleep(0.5)
@@ -71,7 +73,7 @@ def main(sim):
         # Wait for processes to exit gracefully
         for process in processes:
             try:
-                process.wait(timeout=3)
+                process.wait(timeout=2)
             except subprocess.TimeoutExpired:
                 logger.warning(f"Node {process.args} did not terminate in time, killing...")
                 try:

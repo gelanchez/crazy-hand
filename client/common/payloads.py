@@ -1,8 +1,6 @@
-
-
 import ctypes
 
-from common.constants import IMAGE_SIZE
+from client.common.constants import IMAGE_SIZE
 
 
 class ImageData(ctypes.Structure):

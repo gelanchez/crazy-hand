@@ -1,0 +1,22 @@
+[project]
+name = "crazyflie-tfm"
+version = "0.0.1"
+description = "Crazyflie control and image processing via Iceorx2 and Python"
+authors = [{ name = "José Ángel Sánchez" }]
+keywords = ["crazyflie", "iceoryx2", "python", "image processing"]
+dependencies = [
+    "click",
+    "iceoryx2",
+    "numpy",
+    "PySide6",
+    "pillow",
+    "cflib",
+    "opencv-python",
+    "cfclient",
+]
+readme = "README.md"
+requires-python = ">=3.12"
+
+[project.urls]
+Homepage = "https://github.com/gelanchez/crazy-hand-control"
+Repository = "https://github.com/gelanchez/crazy-hand-control.git"

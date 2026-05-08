@@ -96,9 +96,9 @@ make clean
 ## RUN CLIENT
 
 ```bash
-cd client
-python main.py
-python main.py --help
+python -m client.main
+python -m client.main --sim
+python -m client.main --help
 ```
 
 ## TROUBLESHOOTING
