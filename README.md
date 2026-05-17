@@ -158,6 +158,16 @@ make flash-jtag
 make clean
 ```
 
+## ARCHITECTURE
+
+| Publisher | Topic | Subscriber(s) |
+| --- | --- | --- |
+| `gui_node` | `/command` | `control_node` |
+| `control_node` | `/action` | `logger_node`, `wifi_node` |
+| `wifi_node` | `/telemetry` | `control_node`, `logger_node`, `gui_node` |
+| `wifi_node` | `/image` | `logger_node`, `gui_node`, `vision_node` |
+| `vision_node` | `/processed` | `gui_node`, `logger_node`, `control_node` |
+
 ## RUN CLIENT
 
 ```bash

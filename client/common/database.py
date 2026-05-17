@@ -1,5 +1,6 @@
 from datetime import datetime
 from dataclasses import dataclass, fields
+from typing import Union
 from questdb.ingress import Sender, IngressError
 from client.common.utils import setup_logging
 
@@ -10,6 +11,16 @@ logger = setup_logging("database")
 class TelemetrySample:
     ts: datetime
     fps: float
+
+
+@dataclass
+class ActionSample:
+    ts: datetime
+    active: int
+    vx: float
+    vy: float
+    yawrate: float
+    zdistance: float
 
 
 class Database:
@@ -51,7 +62,7 @@ class Database:
             logger.error(f"Unexpected error connecting to QuestDB: {e}")
             return False
 
-    def log(self, sample: TelemetrySample):
+    def log(self, sample: Union[TelemetrySample, ActionSample]):
         if self.closed:
             return
 

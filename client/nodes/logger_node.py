@@ -1,10 +1,10 @@
 import logging
 import iceoryx2
-from client.common.payloads import ImageData, TelemetryData
+from client.common.payloads import ImageData, TelemetryData, ActionData
 from client.common.constants import ServiceName, EventId, IMAGE_WIDTH, IMAGE_HEIGHT
 from client.common.blackboards import CONFIG
 from client.common.node import Node
-from client.common.database import Database, TelemetrySample
+from client.common.database import Database, TelemetrySample, ActionSample
 from PIL import Image
 from pathlib import Path
 from datetime import datetime, timezone
@@ -22,8 +22,9 @@ class LoggerNode(Node):
         # 1. Setup Ports
         self.image_port = self.create_subscriber(ServiceName.IMAGE, ImageData, EventId.IMAGE_READY)
         self.telemetry_port = self.create_subscriber(ServiceName.TELEMETRY, TelemetryData, EventId.TELEMETRY_READY)
+        self.action_port = self.create_subscriber(ServiceName.ACTION, ActionData, EventId.ACTION_READY)
         
-        if self.image_port.subscriber is None or self.telemetry_port.subscriber is None:
+        if self.image_port.subscriber is None or self.telemetry_port.subscriber is None or self.action_port.subscriber is None:
             return
 
         self.blackboard_reader = self.create_blackboard_reader("/config", CONFIG)
@@ -39,6 +40,7 @@ class LoggerNode(Node):
         # Attach listeners. The guards must stay in scope to remain attached.
         image_guard = waitset.attach_notification(self.image_port.listener)
         telemetry_guard = waitset.attach_notification(self.telemetry_port.listener)
+        action_guard = waitset.attach_notification(self.action_port.listener)
 
         self.logger.info("WaitSet initialized, listening for events...")
 
@@ -76,10 +78,28 @@ class LoggerNode(Node):
                         sample = self.telemetry_port.subscriber.receive()
                         if sample is not None:
                             data = sample.payload()
-                            self.logger.debug(f"Received: {data.contents}")
+                            self.logger.debug(f"Received Telemetry: {data.contents}")
                             telemetry_sample = TelemetrySample(ts = datetime.now(timezone.utc), fps = data.contents.fps)
                             del data, sample
                             self.database.log(telemetry_sample)
+
+                    # Handle Action Event
+                    elif event_id.has_event_from(action_guard):
+                        sample = self.action_port.subscriber.receive()
+                        if sample is not None:
+                            data = sample.payload()
+                            self.logger.debug(f"Received Action: {data.contents}")
+                            c = data.contents
+                            action_sample = ActionSample(
+                                ts=datetime.now(timezone.utc),
+                                active=c.active,
+                                vx=c.vx,
+                                vy=c.vy,
+                                yawrate=c.yawrate,
+                                zdistance=c.zdistance
+                            )
+                            del c, data, sample
+                            self.database.log(action_sample)
 
         except (iceoryx2.NodeWaitFailure, iceoryx2.ListenerWaitError, KeyboardInterrupt):
             pass
@@ -88,6 +108,7 @@ class LoggerNode(Node):
         finally:
             image_guard.delete()
             telemetry_guard.delete()
+            action_guard.delete()
             waitset.delete()
             self.database.close()
             self.logger.info(f"{NODE_NAME} shut down")

@@ -15,8 +15,8 @@ from client.common.constants import (
     ServiceName,
     EventId,
     IMAGE_HEIGHT, IMAGE_WIDTH,
-    SPEED_FACTOR, DEFAULT_HEIGHT,
-    IMAGE_SCALING_FACTOR
+    IMAGE_SCALING_FACTOR,
+    KeyCode
 )
 from client.common.blackboards import CONFIG
 from client.common.utils import setup_logging
@@ -65,7 +65,7 @@ class DroneStatus(StrEnum):
     CONNECTED = "Connected — receiving frames"
     DISCONNECTED = "Disconnected"
 
-class GuiNode(Node, QThread):
+class ImageReceiverThreadNode(Node, QThread):
     status_changed = Signal(str)
     image_received = Signal(object)
 
@@ -149,25 +149,24 @@ class MainWindow(QMainWindow):
 
         self.resize(MainWindow.WINDOW_WIDTH, MainWindow.WINDOW_HEIGHT)
 
-        # Flight state
-        self._active = False
-        self._hover = {"vx": 0.0, "vy": 0.0, "yawrate": 0.0, "zdistance": DEFAULT_HEIGHT}
+        self.resize(MainWindow.WINDOW_WIDTH, MainWindow.WINDOW_HEIGHT)
 
-        # Shared node for UI commands
-        # TODO Why two nodes?
-        self.ui_node = Node("gui_cmd", level=logging.DEBUG, handle_signals=False)
-        self.gui_node = GuiNode()
+        # Command Node (Main Thread): Publishes commands instantly on UI events
+        self.command_node = Node("gui_cmd", level=logging.DEBUG, handle_signals=False)
+        
+        # Receiver Thread (Background): Blocks while waiting for high-frequency images
+        self.image_receiver = ImageReceiverThreadNode()
 
         # Writer first, then reader
-        self.blackboard_writer = self.gui_node.create_blackboard_writer("/config", CONFIG)
-        self.blackboard_reader = self.gui_node.create_blackboard_reader("/config", CONFIG)
+        self.blackboard_writer = self.image_receiver.create_blackboard_writer("/config", CONFIG)
+        self.blackboard_reader = self.image_receiver.create_blackboard_reader("/config", CONFIG)
 
         # Command publisher setup
-        self._cmd_port = self.ui_node.create_publisher(ServiceName.COMMAND, CommandData, EventId.COMMAND_READY)
+        self._cmd_port = self.command_node.create_publisher(ServiceName.COMMAND, CommandData, EventId.COMMAND_READY)
 
-        self.gui_node.status_changed.connect(self.statusBar().showMessage)
-        self.gui_node.image_received.connect(self.update_image)
-        self.gui_node.start()
+        self.image_receiver.status_changed.connect(self.statusBar().showMessage)
+        self.image_receiver.image_received.connect(self.update_image)
+        self.image_receiver.start()
 
         self.statusBar().showMessage(DroneStatus.INITIALIZING)
         self._shortcuts_dialog = ShortcutsDialog(self)
@@ -188,7 +187,7 @@ class MainWindow(QMainWindow):
 
         settings_menu = menu_bar.addMenu("Settings")
 
-        process_images_enabled = self.gui_node.blackboard_read(self.blackboard_reader, "process_images")
+        process_images_enabled = self.image_receiver.blackboard_read(self.blackboard_reader, "process_images")
         self.process_images_action = QAction("Process images", self)
         self.process_images_action.setCheckable(True)
         self.process_images_action.setShortcut("Ctrl+P")
@@ -196,7 +195,7 @@ class MainWindow(QMainWindow):
         self.process_images_action.toggled.connect(self._on_process_images_toggled)
         settings_menu.addAction(self.process_images_action)
 
-        save_images_enabled = self.gui_node.blackboard_read(self.blackboard_reader, "save_images")
+        save_images_enabled = self.image_receiver.blackboard_read(self.blackboard_reader, "save_images")
         self.save_images_action = QAction("Save images", self)
         self.save_images_action.setCheckable(True)
         self.save_images_action.setShortcut("Ctrl+S")
@@ -283,25 +282,24 @@ class MainWindow(QMainWindow):
             """,
         )
 
-    def _publish_command(self):
+    def _publish_command(self, key: KeyCode, is_pressed: bool):
         if self._cmd_port is None: return
-        logger.debug(f"Publishing command: active={self._active}, hover={self._hover}")
         try:
             sample = self._cmd_port.publisher.loan_uninit()
             p = sample.payload().contents
-            p.vx, p.vy, p.yawrate, p.zdistance = self._hover["vx"], self._hover["vy"], self._hover["yawrate"], self._hover["zdistance"]
-            p.active = 1 if self._active else 0
+            p.key = key
+            p.is_pressed = 1 if is_pressed else 0
             sample.assume_init().send()
             self._cmd_port.notifier.notify_with_custom_event_id(self._cmd_port.event)
         except Exception as e:
             logger.warning(f"Command publish failed: {e}")
     
     def _on_save_images_toggled(self, checked: bool):
-        self.gui_node.blackboard_write(self.blackboard_writer, "save_images", checked)
+        self.image_receiver.blackboard_write(self.blackboard_writer, "save_images", checked)
         logger.info(f"Save images set to {checked}")
     
     def _on_process_images_toggled(self, checked: bool):
-        self.gui_node.blackboard_write(self.blackboard_writer, "process_images", checked)
+        self.image_receiver.blackboard_write(self.blackboard_writer, "process_images", checked)
         logger.info(f"Process images set to {checked}")
 
     def keyPressEvent(self, event):
@@ -310,37 +308,19 @@ class MainWindow(QMainWindow):
             return
         key = event.key()
         match key:
-            case Qt.Key.Key_Space:
-                # Toggle signal: wifi_node handles arming state
-                self._active = True
-                self._publish_command()
-                super().keyPressEvent(event)
-                return
-            case Qt.Key.Key_Escape:
-                self._active = False
-                self._hover["vx"] = self._hover["vy"] = self._hover["yawrate"] = 0.0
-            case Qt.Key.Key_Up:
-                self._hover["vx"] = SPEED_FACTOR
-            case Qt.Key.Key_Down:
-                self._hover["vx"] = -SPEED_FACTOR
-            case Qt.Key.Key_Left:
-                self._hover["vy"] = SPEED_FACTOR
-            case Qt.Key.Key_Right:
-                self._hover["vy"] = -SPEED_FACTOR
-            case Qt.Key.Key_A:
-                self._hover["yawrate"] = -70.0
-            case Qt.Key.Key_D:
-                self._hover["yawrate"] = 70.0
-            case Qt.Key.Key_Z:
-                self._hover["yawrate"] = -200.0
-            case Qt.Key.Key_X:
-                self._hover["yawrate"] = 200.0
-            case Qt.Key.Key_W:
-                self._hover["zdistance"] = min(2.0, self._hover["zdistance"] + 0.1)
-            case Qt.Key.Key_S:
-                self._hover["zdistance"] = max(0.1, self._hover["zdistance"] - 0.1)
+            case Qt.Key.Key_Space:  self._publish_command(KeyCode.SPACE, True)
+            case Qt.Key.Key_Escape: self._publish_command(KeyCode.ESC, True)
+            case Qt.Key.Key_Up:     self._publish_command(KeyCode.UP, True)
+            case Qt.Key.Key_Down:   self._publish_command(KeyCode.DOWN, True)
+            case Qt.Key.Key_Left:   self._publish_command(KeyCode.LEFT, True)
+            case Qt.Key.Key_Right:  self._publish_command(KeyCode.RIGHT, True)
+            case Qt.Key.Key_A:      self._publish_command(KeyCode.A, True)
+            case Qt.Key.Key_D:      self._publish_command(KeyCode.D, True)
+            case Qt.Key.Key_Z:      self._publish_command(KeyCode.Z, True)
+            case Qt.Key.Key_X:      self._publish_command(KeyCode.X, True)
+            case Qt.Key.Key_W:      self._publish_command(KeyCode.W, True)
+            case Qt.Key.Key_S:      self._publish_command(KeyCode.S, True)
 
-        self._publish_command()
         super().keyPressEvent(event)
 
     def keyReleaseEvent(self, event):
@@ -349,26 +329,26 @@ class MainWindow(QMainWindow):
             return
         key = event.key()
         match key:
-            case Qt.Key.Key_Space:
-                # Don't publish on Space release — toggle is handled by wifi_node
-                super().keyReleaseEvent(event)
-                return
-            case Qt.Key.Key_Up | Qt.Key.Key_Down:
-                self._hover["vx"] = 0.0
-            case Qt.Key.Key_Left | Qt.Key.Key_Right:
-                self._hover["vy"] = 0.0
-            case Qt.Key.Key_A | Qt.Key.Key_D | Qt.Key.Key_Z | Qt.Key.Key_X:
-                self._hover["yawrate"] = 0.0
+            case Qt.Key.Key_Space:  self._publish_command(KeyCode.SPACE, False)
+            case Qt.Key.Key_Escape: self._publish_command(KeyCode.ESC, False)
+            case Qt.Key.Key_Up:     self._publish_command(KeyCode.UP, False)
+            case Qt.Key.Key_Down:   self._publish_command(KeyCode.DOWN, False)
+            case Qt.Key.Key_Left:   self._publish_command(KeyCode.LEFT, False)
+            case Qt.Key.Key_Right:  self._publish_command(KeyCode.RIGHT, False)
+            case Qt.Key.Key_A:      self._publish_command(KeyCode.A, False)
+            case Qt.Key.Key_D:      self._publish_command(KeyCode.D, False)
+            case Qt.Key.Key_Z:      self._publish_command(KeyCode.Z, False)
+            case Qt.Key.Key_X:      self._publish_command(KeyCode.X, False)
+            case Qt.Key.Key_W:      self._publish_command(KeyCode.W, False)
+            case Qt.Key.Key_S:      self._publish_command(KeyCode.S, False)
 
-        self._publish_command()
         super().keyReleaseEvent(event)
 
     def closeEvent(self, event):
-        self._active = False
-        self._publish_command()
-        self.gui_node.requestInterruption()
-        self.gui_node.quit()
-        self.gui_node.wait(3000)
+        self._publish_command(KeyCode.WINDOW_CLOSED, True)
+        self.image_receiver.requestInterruption()
+        self.image_receiver.quit()
+        self.image_receiver.wait(3000)
         super().closeEvent(event)
 
 @click.command()

@@ -14,7 +14,7 @@ class ImageData(ctypes.Structure):
         return f"ImageData(id={self.id}, timestamp={self.timestamp}, size={len(self.pixels)})"
 
 
-class CommandData(ctypes.Structure):
+class ActionData(ctypes.Structure):
     _fields_ = [
         ("vx",        ctypes.c_float),
         ("vy",        ctypes.c_float),
@@ -26,9 +26,19 @@ class CommandData(ctypes.Structure):
 
     def __str__(self) -> str:
         return (
-            f"CommandData(active={self.active}, vx={self.vx:.2f}, vy={self.vy:.2f}, "
+            f"ActionData(active={self.active}, vx={self.vx:.2f}, vy={self.vy:.2f}, "
             f"yaw={self.yawrate:.1f}, z={self.zdistance:.2f})"
         )
+
+
+class CommandData(ctypes.Structure):
+    _fields_ = [
+        ("key", ctypes.c_uint8),
+        ("is_pressed", ctypes.c_uint8),
+    ]
+
+    def __str__(self) -> str:
+        return f"CommandData(key={self.key}, is_pressed={self.is_pressed})"
 
 
 class TelemetryData(ctypes.Structure):

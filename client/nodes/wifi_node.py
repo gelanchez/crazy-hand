@@ -24,7 +24,7 @@ from client.common.constants import (
     IMAGE_HEIGHT,
     IMAGE_SIZE,
 )
-from client.common.payloads import ImageData, CommandData, TelemetryData
+from client.common.payloads import ImageData, ActionData, TelemetryData
 from client.common.node import Node
 from client.common.utils import FPSCounter
 
@@ -241,32 +241,32 @@ class WifiNode(Node):
                     self.logger.warning(f"Telemetry publish error: {e}")
             time.sleep(1)
 
-    def _command_loop(self) -> None:
-        self.logger.info("Command loop started")
+    def _action_loop(self) -> None:
+        self.logger.info("Action loop started")
         armed = False
         hover = (0.0, 0.0, 0.0, 0.3)  # vx, vy, yawrate, zdist
         sample = None
         while self.running:
             sample = None
             try:
-                event_id = self.cmd_port.listener.try_wait_one()
+                event_id = self.action_port.listener.try_wait_one()
             except Exception as e:
                 if self.running:
-                    self.logger.error(f"Command listener error: {e}")
+                    self.logger.error(f"Action listener error: {e}")
                     time.sleep(0.1)
                 continue
 
-            if event_id is not None and event_id == self.cmd_port.event:
+            if event_id is not None and event_id == self.action_port.event:
                 try:
-                    sample = self.cmd_port.subscriber.receive()
+                    sample = self.action_port.subscriber.receive()
                 except Exception as e:
-                    self.logger.warning(f"Command receive error: {e}")
+                    self.logger.warning(f"Action receive error: {e}")
 
                 if sample is not None:
-                    cmd = sample.payload().contents
-                    active = bool(cmd.active)
-                    hover = (cmd.vx, cmd.vy, cmd.yawrate, cmd.zdistance)
-                    del cmd, sample
+                    act = sample.payload().contents
+                    active = bool(act.active)
+                    hover = (act.vx, act.vy, act.yawrate, act.zdistance)
+                    del act, sample
                     sample = None
 
                     # Toggle armed state on active=True (Space press)
@@ -297,7 +297,7 @@ class WifiNode(Node):
                 self.cf.commander.send_stop_setpoint()
             except Exception:
                 pass
-        self.logger.info("Command loop exited")
+        self.logger.info("Action loop exited")
 
     def _on_console(self, text):
         self._console_buffer += text
@@ -406,10 +406,10 @@ class WifiNode(Node):
                 self.image_port = self.create_publisher(ServiceName.IMAGE, ImageData, EventId.IMAGE_READY)
                 self._telemetry_port = self.create_publisher(ServiceName.TELEMETRY, TelemetryData, EventId.TELEMETRY_READY)
 
-                self.cmd_port = self.create_subscriber(ServiceName.COMMAND, CommandData, EventId.COMMAND_READY)
+                self.action_port = self.create_subscriber(ServiceName.ACTION, ActionData, EventId.ACTION_READY)
 
-                if self.cmd_port is None or self.cmd_port.subscriber is None:
-                    self.logger.error("Failed to create command subscriber")
+                if self.action_port is None or self.action_port.subscriber is None:
+                    self.logger.error("Failed to create action subscriber")
                     return
 
                 # Pre-register CPX APP queue to avoid silent frame drops at startup
@@ -417,7 +417,7 @@ class WifiNode(Node):
                 self._connect_time = time.time()
 
                 # 3. START BACKGROUND THREADS
-                threading.Thread(target=self._command_loop, daemon=True).start()
+                threading.Thread(target=self._action_loop, daemon=True).start()
                 threading.Thread(target=self._receive_images, daemon=True).start()
                 threading.Thread(target=self._telemetry_loop, daemon=True).start()
                 threading.Thread(target=self._image_watchdog, daemon=True).start()
@@ -425,7 +425,7 @@ class WifiNode(Node):
                 self.logger.info("Node fully operational, receiving frames and commands...")
 
                 # Main loop: just keep the process alive.
-                # Command sending is handled by _command_loop.
+                # Action sending is handled by _action_loop.
                 # Image reception is handled by _receive_images.
                 while self.running:
                     time.sleep(0.5)

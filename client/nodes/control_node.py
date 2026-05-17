@@ -1,20 +1,125 @@
-import time
-from client.common.node import Node
+import iceoryx2
 import logging
+from client.common.node import Node
+from client.common.constants import ServiceName, EventId, KeyCode, SPEED_FACTOR, DEFAULT_HEIGHT
+from client.common.payloads import CommandData, ActionData
 
 class ControlNode(Node):
+    def __init__(self, level=logging.INFO):
+        super().__init__("control_node", level=level)
+        self._active = False
+        self._hover = {"vx": 0.0, "vy": 0.0, "yawrate": 0.0, "zdistance": DEFAULT_HEIGHT}
+
     def run(self):
         self.logger.info(f"{self.name} running")
+        
+        self.cmd_port = self.create_subscriber(ServiceName.COMMAND, CommandData, EventId.COMMAND_READY)
+        self.action_port = self.create_publisher(ServiceName.ACTION, ActionData, EventId.ACTION_READY)
+        
+        if self.cmd_port is None or self.cmd_port.subscriber is None or self.action_port is None or self.action_port.publisher is None:
+            self.logger.error("Failed to create ports")
+            return
+
+        waitset = iceoryx2.WaitSetBuilder.new().create(iceoryx2.ServiceType.Ipc)
+        cmd_guard = waitset.attach_notification(self.cmd_port.listener)
+
         try:
             while self.running:
-                time.sleep(0.1)
+                ids, result = waitset.wait_and_process_with_timeout(
+                    iceoryx2.Duration.from_millis(100)
+                )
+
+                if result in (iceoryx2.WaitSetRunResult.Interrupt, 
+                              iceoryx2.WaitSetRunResult.TerminationRequest):
+                    self.running = False
+                    break
+
+                for event_id in ids:
+                    if event_id.has_event_from(cmd_guard):
+                        self._process_commands()
+        except (iceoryx2.NodeWaitFailure, iceoryx2.ListenerWaitError, KeyboardInterrupt):
+            pass
+        except Exception as e:
+            self.logger.error(f"ControlNode error: {e}", exc_info=True)
         finally:
+            cmd_guard.delete()
+            waitset.delete()
             self.logger.info(f"{self.name} shut down")
 
-def main():
-    node = ControlNode("control_node", logging.DEBUG)
-    node.run()
+    def _process_commands(self):
+        changed = False
+        while True:
+            try:
+                sample = self.cmd_port.subscriber.receive()
+            except Exception as e:
+                self.logger.warning(f"Command receive error: {e}")
+                break
 
+            if sample is None:
+                break
+                
+            cmd = sample.payload().contents
+            key = cmd.key
+            is_pressed = cmd.is_pressed
+            del cmd, sample
+            
+            changed = True
+            
+            if is_pressed:
+                if key == KeyCode.SPACE:
+                    self._active = True
+                elif key == KeyCode.ESC:
+                    self._active = False
+                    self._hover["vx"] = self._hover["vy"] = self._hover["yawrate"] = 0.0
+                elif key == KeyCode.UP:
+                    self._hover["vx"] = SPEED_FACTOR
+                elif key == KeyCode.DOWN:
+                    self._hover["vx"] = -SPEED_FACTOR
+                elif key == KeyCode.LEFT:
+                    self._hover["vy"] = SPEED_FACTOR
+                elif key == KeyCode.RIGHT:
+                    self._hover["vy"] = -SPEED_FACTOR
+                elif key == KeyCode.A:
+                    self._hover["yawrate"] = -70.0
+                elif key == KeyCode.D:
+                    self._hover["yawrate"] = 70.0
+                elif key == KeyCode.Z:
+                    self._hover["yawrate"] = -200.0
+                elif key == KeyCode.X:
+                    self._hover["yawrate"] = 200.0
+                elif key == KeyCode.W:
+                    self._hover["zdistance"] = min(2.0, self._hover["zdistance"] + 0.1)
+                elif key == KeyCode.S:
+                    self._hover["zdistance"] = max(0.1, self._hover["zdistance"] - 0.1)
+                elif key == KeyCode.WINDOW_CLOSED:
+                    self._active = False
+                    self._hover["vx"] = self._hover["vy"] = self._hover["yawrate"] = 0.0
+            else:
+                if key in (KeyCode.UP, KeyCode.DOWN):
+                    self._hover["vx"] = 0.0
+                elif key in (KeyCode.LEFT, KeyCode.RIGHT):
+                    self._hover["vy"] = 0.0
+                elif key in (KeyCode.A, KeyCode.D, KeyCode.Z, KeyCode.X):
+                    self._hover["yawrate"] = 0.0
+
+        if changed:
+            self._publish_action()
+
+    def _publish_action(self):
+        try:
+            sample = self.action_port.publisher.loan_uninit()
+            p = sample.payload().contents
+            p.vx, p.vy, p.yawrate, p.zdistance = self._hover["vx"], self._hover["vy"], self._hover["yawrate"], self._hover["zdistance"]
+            p.active = 1 if self._active else 0
+            sample.assume_init().send()
+            self.action_port.notifier.notify_with_custom_event_id(self.action_port.event)
+            self.logger.debug(f"Action published: {p.vx}, {p.vy}, {p.yawrate}, {p.zdistance}, active={p.active}")
+        except Exception as e:
+            self.logger.warning(f"Action publish failed: {e}")
+
+def main():
+    node = ControlNode(level=logging.DEBUG)
+    node.run()
 
 if __name__ == "__main__":
     main()

@@ -38,3 +38,20 @@ IMAGE_SCALING_FACTOR = 2 # 1 for original, 2 for upscaled
 # Flight control
 SPEED_FACTOR = 0.3   # m/s for vx/vy
 DEFAULT_HEIGHT = 0.3  # metres for initial take-off
+
+@unique
+class KeyCode(IntEnum):
+    NONE = 0
+    W = auto()
+    S = auto()
+    A = auto()
+    D = auto()
+    UP = auto()
+    DOWN = auto()
+    LEFT = auto()
+    RIGHT = auto()
+    Z = auto()
+    X = auto()
+    SPACE = auto()
+    ESC = auto()
+    WINDOW_CLOSED = auto()
