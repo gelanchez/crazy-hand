@@ -8,6 +8,7 @@ import logging
 import signal
 import tomllib
 from pathlib import Path
+from enum import StrEnum
 
 from client.common.payloads import ImageData, CommandData
 from client.common.constants import (
@@ -15,10 +16,12 @@ from client.common.constants import (
     EventId,
     IMAGE_HEIGHT, IMAGE_WIDTH,
     SPEED_FACTOR, DEFAULT_HEIGHT,
+    IMAGE_SCALING_FACTOR
 )
 from client.common.blackboards import CONFIG
 from client.common.utils import setup_logging
 from client.common.node import Node
+
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -35,16 +38,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from PySide6.QtCore import Qt, QTimer, Signal, Slot, QThread
-from enum import StrEnum
 from PySide6.QtGui import QAction, QFont, QImage, QPixmap
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 NODE_NAME = "gui_node"
+
 logger = setup_logging(NODE_NAME, level=logging.DEBUG)
 
 _SHORTCUTS = {
-    "Ctrl+Q":   "Exit",
-    "Ctrl+/":   "Keyboard Shortcuts",
     "Space":    "Arm / Disarm",
     "Esc":      "Emergency stop",
     "↑ / ↓":    "Forward / Backward",
@@ -52,6 +53,10 @@ _SHORTCUTS = {
     "A / D":    "Yaw left / right",
     "Z / X":    "Fast yaw left / right",
     "W / S":    "Altitude up / down",
+    "Ctrl+Q":   "Exit",
+    "Ctrl+P":   "Process images",
+    "Ctrl+S":   "Save images",
+    "Ctrl+/":   "Keyboard shortcuts",
 }
 
 class DroneStatus(StrEnum):
@@ -110,7 +115,7 @@ class ShortcutsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Keyboard Shortcuts")
-        self.resize(340, 200)
+        self.resize(340, 420)
 
         table = QTableWidget(len(_SHORTCUTS), 2, self)
         table.setHorizontalHeaderLabels(["Shortcut", "Action"])
@@ -131,6 +136,10 @@ class ShortcutsDialog(QDialog):
         layout.addWidget(buttons)
 
 class MainWindow(QMainWindow):
+    PANEL_WIDTH = 300
+    WINDOW_WIDTH = IMAGE_WIDTH * IMAGE_SCALING_FACTOR + PANEL_WIDTH
+    WINDOW_HEIGHT = IMAGE_HEIGHT * IMAGE_SCALING_FACTOR
+    
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Crazyflie GUI")
@@ -138,8 +147,7 @@ class MainWindow(QMainWindow):
         with open(ROOT_DIR / "pyproject.toml", "rb") as f:
             self.project_config = tomllib.load(f)
 
-        video_w = IMAGE_WIDTH * 2
-        self.resize(video_w + 300, IMAGE_HEIGHT * 2)
+        self.resize(MainWindow.WINDOW_WIDTH, MainWindow.WINDOW_HEIGHT)
 
         # Flight state
         self._active = False
@@ -178,21 +186,23 @@ class MainWindow(QMainWindow):
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
 
-        connection_menu = menu_bar.addMenu("Connection")
-        self.connect_action = QAction("Connect", self)
-        self.connect_action.setEnabled(False)
-        self.disconnect_action = QAction("Disconnect", self)
-        self.disconnect_action.setEnabled(False)
-        connection_menu.addAction(self.connect_action)
-        connection_menu.addAction(self.disconnect_action)
+        settings_menu = menu_bar.addMenu("Settings")
 
-        connection_menu.addSeparator()
+        process_images_enabled = self.gui_node.blackboard_read(self.blackboard_reader, "process_images")
+        self.process_images_action = QAction("Process images", self)
+        self.process_images_action.setCheckable(True)
+        self.process_images_action.setShortcut("Ctrl+P")
+        self.process_images_action.setChecked(process_images_enabled)
+        self.process_images_action.toggled.connect(self._on_process_images_toggled)
+        settings_menu.addAction(self.process_images_action)
+
         save_images_enabled = self.gui_node.blackboard_read(self.blackboard_reader, "save_images")
         self.save_images_action = QAction("Save images", self)
         self.save_images_action.setCheckable(True)
+        self.save_images_action.setShortcut("Ctrl+S")
         self.save_images_action.setChecked(save_images_enabled)
         self.save_images_action.toggled.connect(self._on_save_images_toggled)
-        connection_menu.addAction(self.save_images_action)
+        settings_menu.addAction(self.save_images_action)
 
         help_menu = menu_bar.addMenu("Help")
         shortcuts_action = QAction("Keyboard Shortcuts", self)
@@ -222,7 +232,7 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(video_panel, 1)
 
         tele_panel = QFrame()
-        tele_panel.setFixedWidth(300)
+        tele_panel.setFixedWidth(MainWindow.PANEL_WIDTH)
         tele_layout = QVBoxLayout(tele_panel)
         title = QLabel("TELEMETRY")
         title.setFont(QFont("Outfit", 18, QFont.Bold))
@@ -232,6 +242,7 @@ class MainWindow(QMainWindow):
 
     @Slot(object)
     def update_image(self, pixels: np.ndarray):
+        # logger.debug(f"Frame pixel sum: {pixels.sum()}") # Uncomment to verify if drone is sending identical frames
         qt_img = QImage(pixels.data, IMAGE_WIDTH, IMAGE_HEIGHT, IMAGE_WIDTH, QImage.Format.Format_Grayscale8)
         pixmap = QPixmap.fromImage(qt_img).scaledToWidth(self.video_label.width(), Qt.TransformationMode.SmoothTransformation)
         self.video_label.setPixmap(pixmap)
@@ -288,6 +299,10 @@ class MainWindow(QMainWindow):
     def _on_save_images_toggled(self, checked: bool):
         self.gui_node.blackboard_write(self.blackboard_writer, "save_images", checked)
         logger.info(f"Save images set to {checked}")
+    
+    def _on_process_images_toggled(self, checked: bool):
+        self.gui_node.blackboard_write(self.blackboard_writer, "process_images", checked)
+        logger.info(f"Process images set to {checked}")
 
     def keyPressEvent(self, event):
         if event.isAutoRepeat():

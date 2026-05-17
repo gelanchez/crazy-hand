@@ -24,8 +24,32 @@ from client.common.constants import (
     IMAGE_HEIGHT,
     IMAGE_SIZE,
 )
-from client.common.payloads import ImageData, CommandData
+from client.common.payloads import ImageData, CommandData, TelemetryData
 from client.common.node import Node
+from client.common.utils import FPSCounter
+
+# Monkey-patch cflib's CPXRouter to suppress benign traceback logs when disconnecting
+try:
+    import cflib.cpx
+    def _patched_cpx_router_run(self):
+        while self._connected:
+            try:
+                packet = self._transport.readPacket()
+                if packet.function.value not in self._rxQueues:
+                    pass
+                else:
+                    self._rxQueues[packet.function.value].put(packet)
+            except Exception as e:
+                # Only log the exception if we did not purposefully disconnect
+                if self._connected:
+                    print('Exception while reading transport, link probably closed?')
+                    print(e)
+                    import traceback
+                    print(traceback.format_exc())
+
+    cflib.cpx.CPXRouter.run = _patched_cpx_router_run
+except Exception:
+    pass
 
 NODE_NAME = "wifi_node"
 
@@ -34,46 +58,90 @@ def _fill_sim_frame(
 ) -> None:
     image[:] = ((_x + _y + frame_id) % 256).astype(np.uint8)
 
+# How often to emit frame-level DEBUG messages to console (every N frames)
+_FRAME_LOG_INTERVAL = 10
+
 class WifiNode(Node):
+    # Seconds without a frame before watchdog reconnects
+    _NO_IMAGE_TIMEOUT = 5.0
+
     def __init__(self, sim=False):
-        super().__init__(NODE_NAME, level=logging.DEBUG)
+        # DEBUG goes to file; console stays at INFO to avoid per-frame spam
+        super().__init__(NODE_NAME, level=logging.DEBUG, console_level=logging.INFO)
         self.sim = sim
         self._cf_connected = threading.Event()
         self._frame_id = 0
+        self.fps_counter = FPSCounter()
+        self._console_buffer = ""
+        self._frames_since_log = 0
+        self._last_frame_time: float | None = None   # set in _publish_frame
+        self._connect_time: float = 0.0              # set after successful connect
+        self._reconnecting = False                   # True while watchdog is reconnecting
+
+    def _prewarm_cpx_queue(self) -> None:
+        """Pre-register the CPX APP queue before _receive_images starts.
+
+        The cflib router silently drops packets whose function queue does not
+        exist yet (see CPXRouter.run()).  The queue is created lazily on the
+        first receivePacket() call, so if the GAP8 starts streaming before
+        that call is made the first N frames are lost and the stream never
+        recovers.  Calling receivePacket with a very short timeout here
+        creates the queue immediately after connect.
+        """
+        try:
+            self.cf.link.cpx.receivePacket(CPXFunction.APP, timeout=0.01)
+        except queue.Empty:
+            pass  # Expected — we just wanted the queue created
+        self.logger.info("CPX APP queue pre-registered")
 
     def _receive_images(self) -> None:
         self.logger.info("Image reception thread started")
         while self.running:
+            if self._reconnecting:
+                time.sleep(0.2)
+                continue
             try:
                 packet = self.cf.link.cpx.receivePacket(CPXFunction.APP, timeout=0.5)
             except queue.Empty:
                 continue
             except Exception as e:
-                if self.running:
+                if self.running and not self._reconnecting:
                     self.logger.error(f"Error receiving CPX packet: {e}")
+                time.sleep(0.2)  # avoid tight loop while link is down
                 continue
 
             try:
                 data = packet.data
-                if len(data) < 11 or data[0] != 0xBC:
+                # Add a verbose debug print to see EXACTLY what we are receiving
+                if data:
+                    self.logger.debug(f"Received CPX APP packet: len={len(data)}, first_byte=0x{data[0]:02X}")
+                
+                if len(data) != 11 or data[0] != 0xBC:
                     continue
 
                 magic, width, height, depth, fmt, size = struct.unpack("<BHHBBI", data[:11])
                 self.logger.debug(f"Header received: {width}x{height}, size={size}, fmt={fmt}")
-                
+
                 img_stream = bytearray()
-                
+                assembly_ok = True
+
                 while len(img_stream) < size and self.running:
                     try:
                         packet = self.cf.link.cpx.receivePacket(CPXFunction.APP, timeout=0.5)
                         img_stream.extend(packet.data)
                     except queue.Empty:
                         continue
-                
+                    except Exception as e:
+                        if self.running:
+                            self.logger.warning(f"Error during image assembly, dropping frame: {e}")
+                        assembly_ok = False
+                        break
+
                 if not self.running:
                     break
-                    
-                self._publish_frame(bytes(img_stream[:size]), fmt)
+
+                if assembly_ok:
+                    self._publish_frame(bytes(img_stream[:size]), fmt)
             except Exception as e:
                 if self.running:
                     self.logger.error(f"Error assembling image: {e}")
@@ -93,15 +161,85 @@ class WifiNode(Node):
             payload = sample.payload().contents
             payload.id = self._frame_id
             payload.timestamp = int(time.time() * 1000)
-            
+
             # Copy frame data
             ctypes.memmove(payload.pixels, frame_data, min(len(frame_data), IMAGE_SIZE))
-            
-            sample.assume_init().send()
-            self.image_port.notifier.notify_with_custom_event_id(self.image_port.event)
             self._frame_id += 1
+            sample.assume_init().send()
+            self.fps_counter.update()
+            self._last_frame_time = time.time()  # watchdog heartbeat
+
+            # Rate-limit FPS log to avoid flooding (full detail goes to file via DEBUG)
+            self._frames_since_log += 1
+            if self._frames_since_log >= _FRAME_LOG_INTERVAL:
+                self.logger.debug(f"FPS: {self.fps_counter.fps:.1f}")
+                self._frames_since_log = 0
+
+            try:
+                self.image_port.notifier.notify_with_custom_event_id(self.image_port.event)
+            except Exception:
+                # Listener may have disconnected (e.g. GUI shutdown) — not an error
+                pass
+
         except Exception as e:
             self.logger.error(f"Error publishing frame: {e}")
+
+    def _image_watchdog(self) -> None:
+        """Reconnect if no images arrive within _NO_IMAGE_TIMEOUT seconds.
+
+        When the TCP connection is re-established the ESP32 re-sends
+        WIFI_CTRL_STATUS_CLIENT_CONNECTED to the GAP8, which restarts
+        the camera_task streaming loop.
+        """
+        self.logger.info("Image watchdog started")
+        while self.running:
+            time.sleep(1.0)
+            if not self.running or self._reconnecting:
+                continue
+
+            ref = self._last_frame_time if self._last_frame_time is not None else self._connect_time
+            elapsed = time.time() - ref
+
+            if elapsed > self._NO_IMAGE_TIMEOUT:
+                self.logger.warning(
+                    f"No images for {elapsed:.0f}s — reconnecting to restart GAP8 streaming..."
+                )
+                self._reconnecting = True
+                try:
+                    self.cf.close_link()
+                    time.sleep(1.5)
+                    self._cf_connected.clear()
+                    self.cf.open_link(CRAZYFLIE_URI)
+                    if self._cf_connected.wait(timeout=10.0) and self.cf.is_connected():
+                        self._prewarm_cpx_queue()
+                        self.logger.info("Watchdog reconnect successful — waiting for images...")
+                    else:
+                        self.logger.error("Watchdog reconnect failed, will retry")
+                except Exception as e:
+                    self.logger.error(f"Watchdog reconnect error: {e}")
+                finally:
+                    # Always reset the timer so we don't reconnect in a tight loop
+                    self._last_frame_time = time.time()
+                    self._reconnecting = False
+
+    def _telemetry_loop(self) -> None:
+        # Note: telemetry_port is created in run() before this thread starts
+        while self.running:
+            try:
+                sample = self._telemetry_port.publisher.loan_uninit()
+                payload = sample.payload().contents
+                payload.fps = self.fps_counter.fps
+                sample.assume_init().send()
+                try:
+                    self._telemetry_port.notifier.notify_with_custom_event_id(self._telemetry_port.event)
+                except Exception:
+                    # Listener may have disconnected — not an error
+                    pass
+                self.logger.debug(f"Sent {payload}")
+            except Exception as e:
+                if self.running:
+                    self.logger.warning(f"Telemetry publish error: {e}")
+            time.sleep(1)
 
     def _command_loop(self) -> None:
         self.logger.info("Command loop started")
@@ -162,7 +300,26 @@ class WifiNode(Node):
         self.logger.info("Command loop exited")
 
     def _on_console(self, text):
-        self.logger.info(f"CF Console: {text.strip()}")
+        self._console_buffer += text
+        if '\n' in self._console_buffer:
+            lines = self._console_buffer.split('\n')
+            for line in lines[:-1]:
+                line = line.strip()
+                if not line:
+                    continue
+                
+                # Check for standardized log prefixes from firmware
+                if line.startswith("[ERROR]"):
+                    self.logger.error(f"CF Console: {line[7:].strip()}")
+                elif line.startswith("[WARNING]"):
+                    self.logger.warning(f"CF Console: {line[9:].strip()}")
+                elif line.startswith("[DEBUG]"):
+                    self.logger.debug(f"CF Console: {line[7:].strip()}")
+                elif line.startswith("[INFO]"):
+                    self.logger.info(f"CF Console: {line[6:].strip()}")
+                else:
+                    self.logger.info(f"CF Console: {line}")
+            self._console_buffer = lines[-1]
 
     def _on_connected(self, uri):
         self.logger.info(f"Crazyflie connected: {uri}")
@@ -190,9 +347,11 @@ class WifiNode(Node):
         try:
             if self.sim:
                 # In sim mode, we can init iceoryx2 immediately
-                self.image_port = self.create_publisher(ServiceName.IMAGE, ImageData, EventId.IMAGE_READY)                
+                self.image_port = self.create_publisher(ServiceName.IMAGE, ImageData, EventId.IMAGE_READY)
+                self._telemetry_port = self.create_publisher(ServiceName.TELEMETRY, TelemetryData, EventId.TELEMETRY_READY)
                 _y = np.arange(IMAGE_HEIGHT, dtype=np.uint16).reshape(-1, 1)
                 _x = np.arange(IMAGE_WIDTH, dtype=np.uint16).reshape(1, -1)
+                threading.Thread(target=self._telemetry_loop, daemon=True).start()
                 while self.running:
                     self.node.wait(iceoryx2.Duration.from_millis(1000))
                     if not self.running: break
@@ -204,6 +363,8 @@ class WifiNode(Node):
                     _fill_sim_frame(image, self._frame_id, _y, _x)
                     self._frame_id += 1
                     sample.assume_init().send()
+                    self.fps_counter.update()
+                    self.logger.debug(f"FPS: {self.fps_counter.fps:.1f}")
                     self.image_port.notifier.notify_with_custom_event_id(self.image_port.event)
             else:
                 self.logger.info(f"Waiting for network connectivity to {CRAZYFLIE_IP}...")
@@ -222,33 +383,44 @@ class WifiNode(Node):
                 self.cf.connected.add_callback(self._on_connected)
                 self.cf.connection_failed.add_callback(self._on_connection_failed)
                 self.cf.disconnected.add_callback(self._on_disconnected)
+                self.cf.console.receivedChar.add_callback(self._on_console)
+                self.logger.info(f"Opening link to {CRAZYFLIE_URI}...")
+                self.cf.open_link(CRAZYFLIE_URI)
 
                 while self.running and not self.cf.is_connected():
                     self._cf_connected.clear()
-                    self.logger.info(f"Opening link to {CRAZYFLIE_URI}...")
-                    self.cf.open_link(CRAZYFLIE_URI)
-                    if self._cf_connected.wait(timeout=60.0):
+                    if self._cf_connected.wait(timeout=10.0):
                         if self.cf.is_connected():
                             break
-                    self.logger.warning("Connection timed out, retrying...")
-                    try: self.cf.close_link()
-                    except: pass
-                    time.sleep(1.0)
+                    if not self.cf.is_connected():
+                        self.logger.warning("Connection timed out, retrying...")
+                        try: self.cf.close_link()
+                        except: pass
+                        time.sleep(1.0)
+                        self.logger.info(f"Opening link to {CRAZYFLIE_URI}...")
+                        self.cf.open_link(CRAZYFLIE_URI)
 
                 if not self.running: return
 
                 # 2. NOW INITIALIZE ICEORYX2
                 self.image_port = self.create_publisher(ServiceName.IMAGE, ImageData, EventId.IMAGE_READY)
+                self._telemetry_port = self.create_publisher(ServiceName.TELEMETRY, TelemetryData, EventId.TELEMETRY_READY)
 
                 self.cmd_port = self.create_subscriber(ServiceName.COMMAND, CommandData, EventId.COMMAND_READY)
 
-                if self.cmd_port.subscriber is None:
+                if self.cmd_port is None or self.cmd_port.subscriber is None:
                     self.logger.error("Failed to create command subscriber")
                     return
+
+                # Pre-register CPX APP queue to avoid silent frame drops at startup
+                self._prewarm_cpx_queue()
+                self._connect_time = time.time()
 
                 # 3. START BACKGROUND THREADS
                 threading.Thread(target=self._command_loop, daemon=True).start()
                 threading.Thread(target=self._receive_images, daemon=True).start()
+                threading.Thread(target=self._telemetry_loop, daemon=True).start()
+                threading.Thread(target=self._image_watchdog, daemon=True).start()
 
                 self.logger.info("Node fully operational, receiving frames and commands...")
 

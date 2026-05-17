@@ -30,3 +30,11 @@ class CommandData(ctypes.Structure):
             f"yaw={self.yawrate:.1f}, z={self.zdistance:.2f})"
         )
 
+
+class TelemetryData(ctypes.Structure):
+    _fields_ = [
+        ("fps", ctypes.c_float),
+    ]
+
+    def __str__(self) -> str:
+        return f"TelemetryData(fps={self.fps:.1f})"

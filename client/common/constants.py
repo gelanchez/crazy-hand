@@ -32,6 +32,9 @@ IMAGE_WIDTH = 324
 IMAGE_HEIGHT = 244
 IMAGE_SIZE = IMAGE_WIDTH * IMAGE_HEIGHT
 
+# GUI
+IMAGE_SCALING_FACTOR = 2 # 1 for original, 2 for upscaled
+
 # Flight control
 SPEED_FACTOR = 0.3   # m/s for vx/vy
 DEFAULT_HEIGHT = 0.3  # metres for initial take-off

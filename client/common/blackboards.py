@@ -24,4 +24,5 @@ def blackboard_float(key, default=0.0):
 
 CONFIG = {
     "save_images": blackboard_bool(0, False),
+    "process_images": blackboard_bool(1, False),
 }

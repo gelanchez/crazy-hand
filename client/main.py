@@ -1,5 +1,3 @@
-
-
 import click
 import os
 import sys
@@ -26,7 +24,7 @@ def main(sim):
     nodes = [
         "wifi_node",
         "control_node",
-        "processor_node",
+        "vision_node",
         "logger_node",
         "gui_node",
     ]

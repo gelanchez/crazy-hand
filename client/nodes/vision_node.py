@@ -1,12 +1,15 @@
 import logging
+import numpy as np
 import iceoryx2
 from client.common.payloads import ImageData
 from client.common.constants import ServiceName, EventId
 from client.common.node import Node
+from client.common.blackboards import CONFIG
 
-NODE_NAME = "processor_node"
 
-class ProcessorNode(Node):
+NODE_NAME = "vision_node"
+
+class VisionNode(Node):
     def __init__(self, level=logging.DEBUG):
         super().__init__(NODE_NAME, level=level)
 
@@ -14,6 +17,10 @@ class ProcessorNode(Node):
         self.image_port = self.create_subscriber(ServiceName.IMAGE, ImageData, EventId.IMAGE_READY)
         
         if self.image_port.subscriber is None:
+            return
+
+        self.blackboard_reader = self.create_blackboard_reader("/config", CONFIG)
+        if self.blackboard_reader is None:
             return
 
         try:
@@ -25,9 +32,12 @@ class ProcessorNode(Node):
                 if event_id == self.image_port.event:
                     sample = self.image_port.subscriber.receive()
                     if sample is not None:
-                        data = sample.payload()
-                        # Process image data here if needed
-                        del data, sample
+                        if self.blackboard_read(self.blackboard_reader, "process_images"):
+                            data = sample.payload()
+                            pixels = np.ctypeslib.as_array(data.contents.pixels).copy()
+                            del data
+                            # TODO: Process image
+                        del sample
 
         except (iceoryx2.NodeWaitFailure, iceoryx2.ListenerWaitError):
             pass
@@ -37,7 +47,7 @@ class ProcessorNode(Node):
 
 
 def main():
-    node = ProcessorNode()
+    node = VisionNode()
     node.run()
 
 

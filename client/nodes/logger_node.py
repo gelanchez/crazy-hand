@@ -1,6 +1,6 @@
 import logging
 import iceoryx2
-from client.common.payloads import ImageData
+from client.common.payloads import ImageData, TelemetryData
 from client.common.constants import ServiceName, EventId, IMAGE_WIDTH, IMAGE_HEIGHT
 from client.common.blackboards import CONFIG
 from client.common.node import Node
@@ -16,46 +16,74 @@ class LoggerNode(Node):
         super().__init__(NODE_NAME, level=level)
 
     def run(self):
+        # 1. Setup Ports
         self.image_port = self.create_subscriber(ServiceName.IMAGE, ImageData, EventId.IMAGE_READY)
+        self.telemetry_port = self.create_subscriber(ServiceName.TELEMETRY, TelemetryData, EventId.TELEMETRY_READY)
         
-        if self.image_port.subscriber is None:
+        if self.image_port.subscriber is None or self.telemetry_port.subscriber is None:
             return
 
         self.blackboard_reader = self.create_blackboard_reader("/config", CONFIG)
         if self.blackboard_reader is None:
             return
 
-        try:
-            IMAGES_PATH.mkdir(parents=True, exist_ok=True)
+        IMAGES_PATH.mkdir(parents=True, exist_ok=True)
 
+        # 2. Setup WaitSet
+        # We use WaitSet to multiplex between multiple listeners in a single thread.
+        waitset = iceoryx2.WaitSetBuilder.new().create(iceoryx2.ServiceType.Ipc)
+        
+        # Attach listeners. The guards must stay in scope to remain attached.
+        image_guard = waitset.attach_notification(self.image_port.listener)
+        telemetry_guard = waitset.attach_notification(self.telemetry_port.listener)
+
+        self.logger.info("WaitSet initialized, listening for events...")
+
+        try:
             while self.running:
-                event_id = self.image_port.listener.timed_wait_one(
-                    iceoryx2.Duration.from_millis(500)
+                # 3. Wait for events (blocks until an event arrives or timeout)
+                ids, result = waitset.wait_and_process_with_timeout(
+                    iceoryx2.Duration.from_millis(100)
                 )
 
-                save_images = self.blackboard_read(self.blackboard_reader, "save_images")                
-                if event_id == self.image_port.event and save_images:
-                    sample = self.image_port.subscriber.receive()
-                    if sample is not None:
-                        data = sample.payload()
-                        image = Image.frombuffer(
-                            "L",  # mode (grayscale)
-                            (IMAGE_WIDTH, IMAGE_HEIGHT),  # size
-                            data.contents.pixels,  # buffer (no copy)
-                            "raw",  # decoder
-                            "L",  # raw mode
-                            0,  # stride
-                            1,  # orientation
-                        )
-                        image_name = f"{data.contents.timestamp}.png"
-                        image.save(IMAGES_PATH / image_name)
-                        self.logger.debug(f"Saved {data.contents}")
-                        del data, sample
+                # Check if we were interrupted by a signal
+                if result in (iceoryx2.WaitSetRunResult.Interrupt, 
+                              iceoryx2.WaitSetRunResult.TerminationRequest):
+                    self.running = False
+                    break
 
-        except (iceoryx2.NodeWaitFailure, iceoryx2.ListenerWaitError):
+                for event_id in ids:
+                    if event_id.has_event_from(image_guard):
+                        sample = self.image_port.subscriber.receive()
+                        if sample is not None:
+                            save_images = self.blackboard_read(self.blackboard_reader, "save_images")
+                            if save_images:
+                                data = sample.payload()
+                                image = Image.frombuffer(
+                                    "L", (IMAGE_WIDTH, IMAGE_HEIGHT),
+                                    data.contents.pixels, "raw", "L", 0, 1,
+                                )
+                                image_name = f"{data.contents.timestamp}.png"
+                                image.save(IMAGES_PATH / image_name)
+                                self.logger.debug(f"Saved {data.contents}")
+                            del sample
+
+                    # Handle Telemetry Event
+                    elif event_id.has_event_from(telemetry_guard):
+                        sample = self.telemetry_port.subscriber.receive()
+                        if sample is not None:
+                            data = sample.payload()
+                            self.logger.debug(f"Received: {data.contents}")
+                            del data, sample
+
+        except (iceoryx2.NodeWaitFailure, iceoryx2.ListenerWaitError, KeyboardInterrupt):
             pass
-
+        except Exception as e:
+            self.logger.error(f"LoggerNode error: {e}", exc_info=True)
         finally:
+            image_guard.delete()
+            telemetry_guard.delete()
+            waitset.delete()
             self.logger.info(f"{NODE_NAME} shut down")
 
 

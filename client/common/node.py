@@ -39,11 +39,15 @@ class Node:
     IOX2_CONFIG = Path(__file__).parent / "iceoryx2.toml"
     BLACKBOARD_KEY_TYPE = ctypes.c_uint64
 
-    def __init__(self, name, level=logging.INFO, handle_signals=True):
+    def __init__(self, name, level=logging.INFO, console_level=logging.INFO, handle_signals=True):
         self.name = name
-        self.logger = setup_logging(self.name, level=level)
+        self.logger = setup_logging(self.name, level=level, console_level=console_level)
 
         Node.setup_iceoryx2_config()
+        try:
+            iceoryx2.set_log_level(iceoryx2.LogLevel.Error)
+        except Exception:
+            pass
         self.node = (
             iceoryx2.NodeBuilder.new()
             .name(iceoryx2.NodeName.new(self.name))
