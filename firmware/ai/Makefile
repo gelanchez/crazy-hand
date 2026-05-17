@@ -24,6 +24,11 @@ APP_INC			+= ./lib/cpx/inc
 # Compiler flags
 APP_CFLAGS      += -O3 -g -Wall -Wextra -Iinclude
 
+# Debug flag support
+ifdef DEBUG
+APP_CFLAGS      += -DDEBUG
+endif
+
 # FreeRTOS for lib timers for CPX
 APP_CFLAGS 		+= -DconfigUSE_TIMERS=1 -DINCLUDE_xTimerPendFunctionCall=1
 

@@ -137,7 +137,7 @@ void sendBufferViaCPX(CPXPacket_t *packet, uint8_t *buffer,
         if (offset + size > bufferSize) {
             size = bufferSize - offset;
         }
-        memcpy(packet->data, &buffer[offset], sizeof(packet->data));
+        memcpy(packet->data, &buffer[offset], size);
         packet->dataLength = size;
         cpxSendPacketBlocking(packet);
         offset += size;

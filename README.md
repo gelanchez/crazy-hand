@@ -67,6 +67,12 @@ make build
 
 # full rebuild
 make rebuild
+
+# build with debugging enabled (activates #ifdef DEBUG blocks & timing telemetry)
+make build DEBUG=1
+
+# full rebuild with debugging
+make rebuild DEBUG=1
 ```
 
 Output image:
@@ -75,19 +81,36 @@ Output image:
 ai/BUILD/GAP8_V2/GCC_RISCV_FREERTOS/target.board.devices.flash.img
 ```
 
-Flash via radio:
+#### Flashing via Radio
+
+We support two modes of flashing via the Crazyradio PA dongle:
+
+1. **Warm Boot (`make flash`) [Default]**:
+   Use this if the Crazyflie is already running its normal firmware. It will connect to the firmware, automatically reboot the drone into bootloader mode, flash the AI-deck, and restart it.
+
+   ```bash
+   make flash
+   
+   # Override radio URI (default is radio://0/80/2M/E7E7E7E7E7)
+   make flash URI=radio://0/80/2M/E7E7E7E7E7
+   ```
+
+2. **Cold Boot (`make flash-cold`)**:
+   Use this if the Crazyflie is already in bootloader mode (e.g. blue M2 LED blinking, listening on bootloader channel `0`) or if a previous flashing attempt was interrupted.
+
+   ```bash
+   make flash-cold
+   ```
+
+#### Flashing via JTAG
+
+To flash directly using a JTAG cable (e.g. Olimex ARM-USB-OCD-H):
 
 ```bash
-make flash
-
-# Override radio URI
-make flash URI=radio://0/80/2M/E7E7E7E7E7
-
-# Flash via JTAG
 make flash-jtag
 ```
 
-Clean:
+#### Clean Build Artifacts
 
 ```bash
 make clean
@@ -103,11 +126,32 @@ python -m client.main --help
 
 ## TROUBLESHOOTING
 
-Clean Iceoryx2 memory:
+### Clean Iceoryx2 memory
 
 ```bash
 rm -rf /tmp/iceoryx2/*
 rm -rf /dev/shm/iox2_*
 ```
+
+### Crazyradio USB "Access denied (insufficient permissions)" Error
+
+If you get `Failed to flash: [Errno 13] Access denied (insufficient permissions)` when trying to run `cfloader` or flash:
+
+1. Ensure the Bitcraze `udev` rules are installed in `/etc/udev/rules.d/99-bitcraze.rules`:
+
+   ```bash
+   # Crazyradio (normal operation)
+   SUBSYSTEM=="usb", ATTRS{idVendor}=="1915", ATTRS{idProduct}=="7777", MODE="0664", GROUP="plugdev"
+   # Bootloader
+   SUBSYSTEM=="usb", ATTRS{idVendor}=="1915", ATTRS{idProduct}=="0101", MODE="0664", GROUP="plugdev"
+   ```
+
+2. Make sure your user is in the `plugdev` group:
+
+   ```bash
+   sudo usermod -aG plugdev $USER
+   ```
+
+3. **CRITICAL**: Unplug the Crazyradio dongle from the USB port and plug it back in so that the permissions are applied to the active device node.
 
 ## LINKS

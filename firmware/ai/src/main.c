@@ -51,7 +51,7 @@ void led_task(void *parameters) {
     (void)parameters; // Inform the compiler parameters are not used to avoid
                       // warnings
     char *taskname = pcTaskGetName(NULL);
-    cpxPrintToConsole(LOG_TO_CRTP, "Task %s created\n", taskname);
+    cpxPrintToConsole(LOG_TO_CRTP, "[INFO] Task %s created\n", taskname);
 
     // Initialize the LED pin
     pi_device_t led_gpio_dev;
@@ -70,23 +70,23 @@ void camera_task(void *parameters) {
     (void)parameters; // Inform the compiler parameters are not used to avoid
                       // warnings
     char *taskname = pcTaskGetName(NULL);
-    cpxPrintToConsole(LOG_TO_CRTP, "Task %s created\n", taskname);
+    cpxPrintToConsole(LOG_TO_CRTP, "[INFO] Task %s created\n", taskname);
 
     // Open and configure the Himax HM01B0 camera
     struct pi_device camera;
     if (setup_camera(&camera)) {
-        cpxPrintToConsole(LOG_TO_CRTP, "Failed to open and configure camera\n");
+        cpxPrintToConsole(LOG_TO_CRTP, "[ERROR] Failed to open and configure camera\n");
         return;
     }
 
     // Reserve buffer spaces for image
     g_buff_img = pmsis_l2_malloc(IMG_SIZE);
     if (g_buff_img == NULL) {
-        cpxPrintToConsole(LOG_TO_CRTP, "Failed to allocate g_buff_img\n");
+        cpxPrintToConsole(LOG_TO_CRTP, "[ERROR] Failed to allocate g_buff_img\n");
         return;
     }
 
-    cpxPrintToConsole(LOG_TO_CRTP, "Initialized image buffer\n");
+    cpxPrintToConsole(LOG_TO_CRTP, "[INFO] Initialized image buffer\n");
 
 #ifdef JPEG_ENCODING
     // Can we move the JPEG encoding to the cluster?
@@ -98,7 +98,7 @@ void camera_task(void *parameters) {
     encoder_conf.flags = 0; // Grayscale
 
     if (jpeg_encoder_open(&jpeg_encoder, &encoder_conf)) {
-        cpxPrintToConsole(LOG_TO_CRTP, "Failed initialize JPEG encoder\n");
+        cpxPrintToConsole(LOG_TO_CRTP, "[ERROR] Failed to initialize JPEG encoder\n");
         return;
     }
 
@@ -126,7 +126,7 @@ void camera_task(void *parameters) {
 
     if (header.data == 0 || footer.data == 0 || jpeg_data.data == 0) {
         cpxPrintToConsole(LOG_TO_CRTP,
-                          "Could not allocate memory for JPEG image\n");
+                          "[ERROR] Could not allocate memory for JPEG image\n");
         return;
     }
 
@@ -150,16 +150,16 @@ void camera_task(void *parameters) {
     while (true) {
         // CAPTURE
         start = xTaskGetTickCount();
+        pi_camera_control(&camera, PI_CAMERA_CMD_START, 0);
         pi_camera_capture_async(
             &camera, g_buff_img, IMG_SIZE,
             pi_task_callback(&g_task, image_capture_done_cb, NULL));
-        pi_camera_control(&camera, PI_CAMERA_CMD_START, 0);
         xEventGroupWaitBits(g_eventGroup, CAPTURE_DONE_BIT, pdTRUE, pdFALSE,
                             (TickType_t)portMAX_DELAY);
         pi_camera_control(&camera, PI_CAMERA_CMD_STOP, 0);
         captureTime = xTaskGetTickCount() - start;
 
-        if (g_wifiClientConnected == 1) {
+        if (g_wifiClientConnected) {
             // PROCESS
             start = xTaskGetTickCount();
             processTime = xTaskGetTickCount() - start;
@@ -182,22 +182,16 @@ void camera_task(void *parameters) {
 #endif
             transferTime = xTaskGetTickCount() - start;
 
-            // TODO Process and send CPX data to STM
-            // cpxInitRoute(CPX_T_GAP8, CPX_T_STM32, CPX_F_APP,
-            // &g_txPacket.route); //
-            // TODO We need a different CPX packet here
             start = xTaskGetTickCount();
-            // g_txPacket.data[0] = 0;
-            // g_txPacket.dataLength = 1;
-            // cpxSendPacketBlocking(&g_txPacket);
             cpxTime = xTaskGetTickCount() - start;
 
+#ifdef DEBUG
             cpxPrintToConsole(
                 LOG_TO_CRTP,
-                "cap = %d ms, proc = %d ms, enc = %d ms (%d B), xfer = "
-                "%d ms, CPX = %d ms\n",
+                "[DEBUG] cap=%dms proc=%dms enc=%dms(%dB) xfer=%dms cpx=%dms\n",
                 captureTime, processTime, encodeTime, imgSize, transferTime,
                 cpxTime);
+#endif
         } else {
             vTaskDelay(10);
         }
@@ -208,7 +202,7 @@ void rx_task(void *parameters) {
     (void)parameters; // Inform the compiler parameters are not used to avoid
                       // warnings
     char *taskname = pcTaskGetName(NULL);
-    cpxPrintToConsole(LOG_TO_CRTP, "Task %s created\n", taskname);
+    cpxPrintToConsole(LOG_TO_CRTP, "[INFO] Task %s created\n", taskname);
 
     while (true) {
         // TODO client alive, multiple clients?
@@ -219,18 +213,16 @@ void rx_task(void *parameters) {
                 g_rxPacket.data; // Pointers to the same memory location
 
         switch (wifiCtrl->cmd) {
-        case WIFI_CTRL_STATUS_WIFI_CONNECTED: // Not used in access point (I
-                                              // think)
-            cpxPrintToConsole(LOG_TO_CRTP, "WiFi connected (%u.%u.%u.%u)\n",
+        case WIFI_CTRL_STATUS_WIFI_CONNECTED:
+            cpxPrintToConsole(LOG_TO_CRTP, "[INFO] WiFi connected (%u.%u.%u.%u)\n",
                               wifiCtrl->data[0], wifiCtrl->data[1],
                               wifiCtrl->data[2], wifiCtrl->data[3]);
             g_wifiConnected = true;
             break;
         case WIFI_CTRL_STATUS_CLIENT_CONNECTED:
-            cpxPrintToConsole(LOG_TO_CRTP,
-                              "WiFi client connection status: %u\n",
-                              wifiCtrl->data[0]);
-            g_wifiClientConnected = true;
+            g_wifiClientConnected = (wifiCtrl->data[0] == 1);
+            cpxPrintToConsole(LOG_TO_CRTP, "[INFO] WiFi client %s\n",
+                              g_wifiClientConnected ? "connected" : "disconnected");
             break;
         default:
             break;
@@ -243,7 +235,7 @@ void run(void) {
     cpxInit();
     cpxEnableFunction(CPX_F_APP);
     cpxEnableFunction(CPX_F_WIFI_CTRL);
-    cpxPrintToConsole(LOG_TO_CRTP, "\n*** %s ***\n", APP_NAME);
+    cpxPrintToConsole(LOG_TO_CRTP, "\n[INFO] *** %s ***\n", APP_NAME);
 
     // Setup WiFi access point
     setupWiFi(&g_txPacket);
@@ -251,8 +243,8 @@ void run(void) {
     // Event group
     g_eventGroup = xEventGroupCreate();
     if (g_eventGroup == NULL) {
-        cpxPrintToConsole(LOG_TO_CRTP, "Failed to create event group, "
-                                       "insuficient FreeRTOS heap available\n");
+        cpxPrintToConsole(LOG_TO_CRTP, "[ERROR] Failed to create event group, "
+                                       "insufficient FreeRTOS heap available\n");
         pmsis_exit(-1);
     }
 
@@ -262,7 +254,7 @@ void run(void) {
     xTask = xTaskCreate(led_task, "LED_TASK", configMINIMAL_STACK_SIZE * 2,
                         NULL, tskIDLE_PRIORITY + 1, NULL);
     if (xTask != pdPASS) {
-        cpxPrintToConsole(LOG_TO_CRTP, "LED_TASK did not start!\n");
+        cpxPrintToConsole(LOG_TO_CRTP, "[ERROR] LED_TASK did not start!\n");
         pmsis_exit(-1);
     }
 
@@ -271,7 +263,7 @@ void run(void) {
         xTaskCreate(camera_task, "CAMERA_TASK", configMINIMAL_STACK_SIZE * 4,
                     NULL, tskIDLE_PRIORITY + 2, NULL);
     if (xTask != pdPASS) {
-        cpxPrintToConsole(LOG_TO_CRTP, "CAMERA_TASK did not start!\n");
+        cpxPrintToConsole(LOG_TO_CRTP, "[ERROR] CAMERA_TASK did not start!\n");
         pmsis_exit(-1);
     }
 
@@ -279,7 +271,7 @@ void run(void) {
     xTask = xTaskCreate(rx_task, "RX_TASK", configMINIMAL_STACK_SIZE * 2, NULL,
                         tskIDLE_PRIORITY + 1, NULL);
     if (xTask != pdPASS) {
-        cpxPrintToConsole(LOG_TO_CRTP, "RX_TASK did not start!\n");
+        cpxPrintToConsole(LOG_TO_CRTP, "[ERROR] RX_TASK did not start!\n");
         pmsis_exit(-1);
     }
 
