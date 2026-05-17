@@ -4,8 +4,10 @@
 
 ### Dependencies
 
-- [Docker](https://docs.docker.com/engine/install/ubuntu/)
 - [Python 3](https://www.python.org/downloads/)
+- [Docker](https://docs.docker.com/engine/install/ubuntu/)
+- [Grafana](https://grafana.com/oss/grafana/)
+- [QuestDB](https://questdb.com/docs/getting-started/quick-start/)
 - Build tools (make, gcc, etc).
 
 ### Python environment
@@ -15,8 +17,48 @@ Create virtual enviroment and install dependencies:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install .
 ```
+
+### Grafana
+
+Follow steps in [Install Grafana](https://grafana.com/docs/grafana/latest/setup-grafana/installation/debian/).
+
+To [start Grafana](https://grafana.com/docs/grafana/latest/setup-grafana/start-restart-grafana/), execute the following statements to configure Grafana to start automatically using systemd:
+
+```text
+ sudo /bin/systemctl daemon-reload
+ sudo /bin/systemctl enable grafana-server
+ ```
+
+Start grafana-server by executing:
+
+```text
+sudo /bin/systemctl start grafana-server
+```
+
+Open [Grafana server](https://grafana.com/docs/grafana/latest/setup-grafana/sign-in-to-grafana/).
+
+Grafana UI:
+<http://localhost:3000>
+
+### QuestDB
+
+[QuestDB](https://questdb.com/docs/getting-started/quick-start/) is an open source time-series database engineered for low latency.
+
+Start QuestDB:
+
+```bash
+# Local folder installation
+cd path_to_QuestDB/bin
+./questdb.sh start
+
+# Docker image:
+docker run -p 9000:9000 -p 8812:8812 -p 9003:9003 questdb/questdb:9.3.5
+```
+
+QuestDB UI:
+<http://localhost:9000>
 
 ## COMPILE FIRMWARE AND FLASH
 
@@ -68,7 +110,7 @@ make build
 # full rebuild
 make rebuild
 
-# build with debugging enabled (activates #ifdef DEBUG blocks & timing telemetry)
+# build with debugging enabled
 make build DEBUG=1
 
 # full rebuild with debugging

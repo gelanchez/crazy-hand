@@ -353,7 +353,7 @@ class WifiNode(Node):
                 _x = np.arange(IMAGE_WIDTH, dtype=np.uint16).reshape(1, -1)
                 threading.Thread(target=self._telemetry_loop, daemon=True).start()
                 while self.running:
-                    self.node.wait(iceoryx2.Duration.from_millis(1000))
+                    self.node.wait(iceoryx2.Duration.from_millis(100))
                     if not self.running: break
                     sample = self.image_port.publisher.loan_uninit()
                     payload = sample.payload().contents

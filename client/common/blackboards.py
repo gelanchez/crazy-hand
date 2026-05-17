@@ -14,7 +14,6 @@ def blackboard_bool(key, default=False):
         default=ctypes.c_bool(default),
     )
 
-
 def blackboard_float(key, default=0.0):
     return BlackboardField(
         key=ctypes.c_uint64(key),

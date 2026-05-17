@@ -4,8 +4,10 @@ from client.common.payloads import ImageData, TelemetryData
 from client.common.constants import ServiceName, EventId, IMAGE_WIDTH, IMAGE_HEIGHT
 from client.common.blackboards import CONFIG
 from client.common.node import Node
+from client.common.database import Database, TelemetrySample
 from PIL import Image
 from pathlib import Path
+from datetime import datetime, timezone
 
 NODE_NAME = "logger_node"
 IMAGES_PATH = Path("./data/images")
@@ -14,6 +16,7 @@ IMAGES_PATH = Path("./data/images")
 class LoggerNode(Node):
     def __init__(self, level=logging.INFO):
         super().__init__(NODE_NAME, level=level)
+        self.database = Database()
 
     def run(self):
         # 1. Setup Ports
@@ -74,7 +77,9 @@ class LoggerNode(Node):
                         if sample is not None:
                             data = sample.payload()
                             self.logger.debug(f"Received: {data.contents}")
+                            telemetry_sample = TelemetrySample(ts = datetime.now(timezone.utc), fps = data.contents.fps)
                             del data, sample
+                            self.database.log(telemetry_sample)
 
         except (iceoryx2.NodeWaitFailure, iceoryx2.ListenerWaitError, KeyboardInterrupt):
             pass
@@ -84,6 +89,7 @@ class LoggerNode(Node):
             image_guard.delete()
             telemetry_guard.delete()
             waitset.delete()
+            self.database.close()
             self.logger.info(f"{NODE_NAME} shut down")
 
 

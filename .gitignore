@@ -24,3 +24,8 @@ data/
 ground_station/
 legacy/
 output.txt
+
+# Python build artifacts
+build/
+dist/
+*.egg-info/
