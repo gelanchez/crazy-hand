@@ -23,6 +23,7 @@ dependencies = [
     "cfclient",
     "questdb[dataframe]",
     "pandas",
+    "mediapipe",
 ]
 readme = "README.md"
 requires-python = ">=3.12"

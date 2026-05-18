@@ -20,6 +20,10 @@ source .venv/bin/activate
 pip install .
 ```
 
+### Mediapipe
+
+Download [HandLandmarker model](https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task) and [HandGestureClassifier](https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/latest/gesture_recognizer.task) and place them in `data` folder.
+
 ### Grafana
 
 Follow steps in [Install Grafana](https://grafana.com/docs/grafana/latest/setup-grafana/installation/debian/).
@@ -207,3 +211,8 @@ If you get `Failed to flash: [Errno 13] Access denied (insufficient permissions)
 3. **CRITICAL**: Unplug the Crazyradio dongle from the USB port and plug it back in so that the permissions are applied to the active device node.
 
 ## LINKS
+
+- <https://ai.google.dev/edge/mediapipe/solutions/vision/hand_landmarker/python>
+- <https://ai.google.dev/edge/mediapipe/solutions/vision/hand_landmarker/index#models>
+- <https://ai.google.dev/edge/mediapipe/solutions/setup_python>
+- <https://ai.google.dev/edge/mediapipe/solutions/vision/gesture_recognizer>

@@ -63,8 +63,6 @@ _SHORTCUTS = {
 }
 
 APP_STATUS_TEXT = {
-    AppStatus.INITIALIZING: "Initializing...",
-    AppStatus.WAITING: "Waiting for services...",
     AppStatus.CONNECTED: "Connected — receiving frames",
     AppStatus.DISCONNECTED: "Disconnected",
     AppStatus.SIMULATING: "Connected (Simulating)",
@@ -80,7 +78,7 @@ class ImageReceiverThreadNode(Node, QThread):
 
     def run(self):
         self.logger.info(f"{NODE_NAME} running")
-        self.status_changed.emit(APP_STATUS_TEXT[AppStatus.WAITING])
+        self.status_changed.emit("Waiting for services...")
 
         self.image_port = self.create_subscriber(ServiceName.IMAGE, ImageData, EventId.IMAGE_READY,
                                   check_interruption=self.isInterruptionRequested)
@@ -192,7 +190,7 @@ class MainWindow(QMainWindow):
         self.image_receiver.image_received.connect(self.update_image)
         self.image_receiver.start()
 
-        self.statusBar().showMessage(APP_STATUS_TEXT[AppStatus.INITIALIZING])
+        self.statusBar().showMessage("Initializing...")
         self._shortcuts_dialog = ShortcutsDialog(self)
 
         # Menu bar setup
