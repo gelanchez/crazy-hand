@@ -1,9 +1,10 @@
-import click
 import os
-import sys
-import subprocess
-import time
 import signal
+import subprocess
+import sys
+import time
+
+import click
 
 from client.common.utils import setup_logging
 

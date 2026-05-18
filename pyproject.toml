@@ -3,7 +3,15 @@ name = "crazyflie-tfm"
 version = "0.0.1"
 description = "Crazyflie control and image processing via Iceorx2 and Python"
 authors = [{ name = "José Ángel Sánchez" }]
-keywords = ["crazyflie", "iceoryx2", "python", "image processing"]
+keywords = [
+    "crazyflie",
+    "iceoryx2",
+    "python",
+    "drone",
+    "image processing",
+    "computer vision",
+    "drone control",
+]
 dependencies = [
     "click",
     "iceoryx2",

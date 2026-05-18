@@ -1,4 +1,4 @@
-from enum import StrEnum, auto, unique, IntEnum
+from enum import IntEnum, StrEnum, auto, unique
 from pathlib import Path
 
 IOX2_CONFIG = Path(__file__).parent / "iceoryx2.toml"
@@ -31,6 +31,14 @@ class EventId(IntEnum):
 IMAGE_WIDTH = 324
 IMAGE_HEIGHT = 244
 IMAGE_SIZE = IMAGE_WIDTH * IMAGE_HEIGHT
+
+@unique
+class AppStatus(IntEnum):
+    DISCONNECTED = 0
+    CONNECTED = 1
+    SIMULATING = 2
+    INITIALIZING = 3
+    WAITING = 4
 
 # GUI
 IMAGE_SCALING_FACTOR = 2 # 1 for original, 2 for upscaled

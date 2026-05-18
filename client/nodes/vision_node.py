@@ -1,10 +1,12 @@
 import logging
-import numpy as np
+
 import iceoryx2
-from client.common.payloads import ImageData
-from client.common.constants import ServiceName, EventId
-from client.common.node import Node
+import numpy as np
+
 from client.common.blackboards import CONFIG
+from client.common.constants import EventId, ServiceName
+from client.common.node import Node
+from client.common.payloads import ImageData
 
 
 NODE_NAME = "vision_node"

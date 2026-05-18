@@ -1,7 +1,12 @@
-from datetime import datetime
 from dataclasses import dataclass, fields
+from datetime import datetime
 from typing import Union
-from questdb.ingress import Sender, IngressError
+
+from enum import Enum
+
+from questdb.ingress import IngressError, Sender
+
+from client.common.constants import AppStatus
 from client.common.utils import setup_logging
 
 logger = setup_logging("database")
@@ -11,6 +16,7 @@ logger = setup_logging("database")
 class TelemetrySample:
     ts: datetime
     fps: float
+    status: AppStatus
 
 
 @dataclass
@@ -71,20 +77,30 @@ class Database:
                 return
 
         try:
-            # Dynamically extract and round float fields from the dataclass (excluding 'ts')
             columns = {}
+            symbols = {}
             for f in fields(sample):
                 if f.name == "ts":
                     continue
                 val = getattr(sample, f.name)
-                if isinstance(val, float):
-                    val = round(val, self.precision)
-                columns[f.name] = val
+                if isinstance(val, Enum):
+                    symbols[f.name] = val.name
+                elif isinstance(val, str):
+                    symbols[f.name] = val
+                else:
+                    if isinstance(val, float):
+                        val = round(val, self.precision)
+                    columns[f.name] = val
+
+            kwargs = {"at": sample.ts}
+            if symbols:
+                kwargs["symbols"] = symbols
+            if columns:
+                kwargs["columns"] = columns
 
             self.sender.row(
                 self.table_name,
-                columns=columns,
-                at=sample.ts,
+                **kwargs
             )
             self._buffered_count += 1
 

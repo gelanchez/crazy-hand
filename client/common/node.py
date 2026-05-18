@@ -1,12 +1,14 @@
-import iceoryx2
+import ctypes
 import logging
-from client.common.utils import setup_logging
 import signal
 import time
-import ctypes
+
+import iceoryx2
 
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from client.common.utils import setup_logging
 
 
 @dataclass

@@ -1,13 +1,17 @@
 import logging
+
 import iceoryx2
-from client.common.payloads import ImageData, TelemetryData, ActionData
-from client.common.constants import ServiceName, EventId, IMAGE_WIDTH, IMAGE_HEIGHT
-from client.common.blackboards import CONFIG
-from client.common.node import Node
-from client.common.database import Database, TelemetrySample, ActionSample
-from PIL import Image
-from pathlib import Path
+
 from datetime import datetime, timezone
+from pathlib import Path
+
+from PIL import Image
+
+from client.common.blackboards import CONFIG
+from client.common.constants import EventId, IMAGE_HEIGHT, IMAGE_WIDTH, ServiceName
+from client.common.database import ActionSample, Database, TelemetrySample
+from client.common.node import Node
+from client.common.payloads import ActionData, ImageData, TelemetryData
 
 NODE_NAME = "logger_node"
 IMAGES_PATH = Path("./data/images")
@@ -79,7 +83,12 @@ class LoggerNode(Node):
                         if sample is not None:
                             data = sample.payload()
                             self.logger.debug(f"Received Telemetry: {data.contents}")
-                            telemetry_sample = TelemetrySample(ts = datetime.now(timezone.utc), fps = data.contents.fps)
+                            from client.common.constants import AppStatus
+                            try:
+                                status_enum = AppStatus(data.contents.status)
+                            except ValueError:
+                                status_enum = AppStatus.DISCONNECTED
+                            telemetry_sample = TelemetrySample(ts=datetime.now(timezone.utc), fps=data.contents.fps, status=status_enum)
                             del data, sample
                             self.database.log(telemetry_sample)
 

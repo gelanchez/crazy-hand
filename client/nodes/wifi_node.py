@@ -1,31 +1,34 @@
 import ctypes
 import io
-import struct
-import time
-import threading
-import click
-import subprocess
+import logging
 import platform
+import queue
+import struct
+import subprocess
+import threading
+import time
+
+import cflib.crtp
+import click
 import iceoryx2
 import numpy as np
-import queue
-import cflib.crtp
-import logging
 
 from cflib.crazyflie import Crazyflie
 from cflib.cpx import CPXFunction
 from PIL import Image
+
 from client.common.constants import (
     CRAZYFLIE_IP,
     CRAZYFLIE_URI,
-    ServiceName,
+    AppStatus,
     EventId,
-    IMAGE_WIDTH,
     IMAGE_HEIGHT,
     IMAGE_SIZE,
+    IMAGE_WIDTH,
+    ServiceName,
 )
-from client.common.payloads import ImageData, ActionData, TelemetryData
 from client.common.node import Node
+from client.common.payloads import ActionData, ImageData, TelemetryData
 from client.common.utils import FPSCounter
 
 # Monkey-patch cflib's CPXRouter to suppress benign traceback logs when disconnecting
@@ -53,13 +56,13 @@ except Exception:
 
 NODE_NAME = "wifi_node"
 
+# How often to emit frame-level DEBUG messages to console (every N frames)
+_FRAME_LOG_INTERVAL = 10
+
 def _fill_sim_frame(
     image: np.ndarray, frame_id: int, _y: np.ndarray, _x: np.ndarray
 ) -> None:
     image[:] = ((_x + _y + frame_id) % 256).astype(np.uint8)
-
-# How often to emit frame-level DEBUG messages to console (every N frames)
-_FRAME_LOG_INTERVAL = 10
 
 class WifiNode(Node):
     # Seconds without a frame before watchdog reconnects
@@ -226,12 +229,19 @@ class WifiNode(Node):
         # Note: telemetry_port is created in run() before this thread starts
         while self.running:
             try:
-                sample = self._telemetry_port.publisher.loan_uninit()
+                sample = self.telemetry_port.publisher.loan_uninit()
                 payload = sample.payload().contents
                 payload.fps = self.fps_counter.fps
+                if self.sim:
+                    payload.status = AppStatus.SIMULATING
+                else:
+                    if hasattr(self, 'cf') and self.cf is not None and self.cf.is_connected():
+                        payload.status = AppStatus.CONNECTED
+                    else:
+                        payload.status = AppStatus.DISCONNECTED
                 sample.assume_init().send()
                 try:
-                    self._telemetry_port.notifier.notify_with_custom_event_id(self._telemetry_port.event)
+                    self.telemetry_port.notifier.notify_with_custom_event_id(self.telemetry_port.event)
                 except Exception:
                     # Listener may have disconnected — not an error
                     pass
@@ -348,7 +358,7 @@ class WifiNode(Node):
             if self.sim:
                 # In sim mode, we can init iceoryx2 immediately
                 self.image_port = self.create_publisher(ServiceName.IMAGE, ImageData, EventId.IMAGE_READY)
-                self._telemetry_port = self.create_publisher(ServiceName.TELEMETRY, TelemetryData, EventId.TELEMETRY_READY)
+                self.telemetry_port = self.create_publisher(ServiceName.TELEMETRY, TelemetryData, EventId.TELEMETRY_READY)
                 _y = np.arange(IMAGE_HEIGHT, dtype=np.uint16).reshape(-1, 1)
                 _x = np.arange(IMAGE_WIDTH, dtype=np.uint16).reshape(1, -1)
                 threading.Thread(target=self._telemetry_loop, daemon=True).start()
@@ -404,7 +414,7 @@ class WifiNode(Node):
 
                 # 2. NOW INITIALIZE ICEORYX2
                 self.image_port = self.create_publisher(ServiceName.IMAGE, ImageData, EventId.IMAGE_READY)
-                self._telemetry_port = self.create_publisher(ServiceName.TELEMETRY, TelemetryData, EventId.TELEMETRY_READY)
+                self.telemetry_port = self.create_publisher(ServiceName.TELEMETRY, TelemetryData, EventId.TELEMETRY_READY)
 
                 self.action_port = self.create_subscriber(ServiceName.ACTION, ActionData, EventId.ACTION_READY)
 

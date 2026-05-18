@@ -3,7 +3,7 @@ ifndef GAP_SDK_HOME
 endif
 
 APP             = crazyflie-control
-APP_CFLAGS 		+= -DAPP_NAME=\"CRAZYFLIE-AI\"
+APP_CFLAGS 		+= -DAPP_NAME=\"CRAZYFLIE-TFM\"
 # io			= uart
 # io			= host
 
@@ -32,11 +32,13 @@ endif
 # FreeRTOS for lib timers for CPX
 APP_CFLAGS 		+= -DconfigUSE_TIMERS=1 -DINCLUDE_xTimerPendFunctionCall=1
 
-# Configure camera #! Choose VGA mode here
+#! Choose VGA mode here
+# Configure camera
 APP_CFLAGS 		+= -DQVGA_MODE # QVGA format (324x244)
 # APP_CFLAGS 		+= -DQQVGA_MODE # @ QQVGA format (164x124)
 
-# Image encoding #! Choose encoding here
+#! Choose encoding here
+# Image encoding
 APP_CFLAGS 		+= -DRAW_ENCODING
 # APP_CFLAGS		+= -DJPEG_ENCODING
 CONFIG_GAP_LIB_JPEG = 1

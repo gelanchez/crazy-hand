@@ -44,7 +44,13 @@ class CommandData(ctypes.Structure):
 class TelemetryData(ctypes.Structure):
     _fields_ = [
         ("fps", ctypes.c_float),
+        ("status", ctypes.c_uint8),
     ]
 
     def __str__(self) -> str:
-        return f"TelemetryData(fps={self.fps:.1f})"
+        from client.common.constants import AppStatus
+        try:
+            status_str = AppStatus(self.status).name
+        except ValueError:
+            status_str = "UNKNOWN"
+        return f"TelemetryData(fps={self.fps:.1f}, status={status_str})"

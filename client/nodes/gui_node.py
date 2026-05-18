@@ -1,27 +1,18 @@
+import logging
 import os
+import signal
 import sys
 import time
-import click
-import numpy as np
-import iceoryx2
-import logging
-import signal
 import tomllib
+
+import click
+import iceoryx2
+import numpy as np
+
 from pathlib import Path
-from enum import StrEnum
 
-from client.common.payloads import ImageData, CommandData
-from client.common.constants import (
-    ServiceName,
-    EventId,
-    IMAGE_HEIGHT, IMAGE_WIDTH,
-    IMAGE_SCALING_FACTOR,
-    KeyCode
-)
-from client.common.blackboards import CONFIG
-from client.common.utils import setup_logging
-from client.common.node import Node
-
+from PySide6.QtCore import Qt, QThread, QTimer, Signal, Slot
+from PySide6.QtGui import QAction, QFont, QImage, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -37,8 +28,20 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PySide6.QtCore import Qt, QTimer, Signal, Slot, QThread
-from PySide6.QtGui import QAction, QFont, QImage, QPixmap
+
+from client.common.blackboards import CONFIG
+from client.common.constants import (
+    AppStatus,
+    EventId,
+    IMAGE_HEIGHT,
+    IMAGE_SCALING_FACTOR,
+    IMAGE_WIDTH,
+    KeyCode,
+    ServiceName,
+)
+from client.common.node import Node
+from client.common.payloads import CommandData, ImageData, TelemetryData
+from client.common.utils import setup_logging
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 NODE_NAME = "gui_node"
@@ -59,11 +62,13 @@ _SHORTCUTS = {
     "Ctrl+/":   "Keyboard shortcuts",
 }
 
-class DroneStatus(StrEnum):
-    INITIALIZING = "Initializing..."
-    WAITING = "Waiting for services..."
-    CONNECTED = "Connected — receiving frames"
-    DISCONNECTED = "Disconnected"
+APP_STATUS_TEXT = {
+    AppStatus.INITIALIZING: "Initializing...",
+    AppStatus.WAITING: "Waiting for services...",
+    AppStatus.CONNECTED: "Connected — receiving frames",
+    AppStatus.DISCONNECTED: "Disconnected",
+    AppStatus.SIMULATING: "Connected (Simulating)",
+}
 
 class ImageReceiverThreadNode(Node, QThread):
     status_changed = Signal(str)
@@ -75,41 +80,60 @@ class ImageReceiverThreadNode(Node, QThread):
 
     def run(self):
         self.logger.info(f"{NODE_NAME} running")
-        self.status_changed.emit(DroneStatus.WAITING)
+        self.status_changed.emit(APP_STATUS_TEXT[AppStatus.WAITING])
 
         self.image_port = self.create_subscriber(ServiceName.IMAGE, ImageData, EventId.IMAGE_READY,
                                   check_interruption=self.isInterruptionRequested)
+        self.telemetry_port = self.create_subscriber(ServiceName.TELEMETRY, TelemetryData, EventId.TELEMETRY_READY,
+                                  check_interruption=self.isInterruptionRequested)
 
-        if self.image_port.subscriber is None:
-            self.status_changed.emit(DroneStatus.DISCONNECTED)
+        if self.image_port.subscriber is None or self.telemetry_port.subscriber is None:
+            self.status_changed.emit(APP_STATUS_TEXT[AppStatus.DISCONNECTED])
             return
 
-        self.status_changed.emit(DroneStatus.CONNECTED)
+        # Status remains WAITING until first telemetry payload arrives
+
+        waitset = iceoryx2.WaitSetBuilder.new().create(iceoryx2.ServiceType.Ipc)
+        image_guard = waitset.attach_notification(self.image_port.listener)
+        telemetry_guard = waitset.attach_notification(self.telemetry_port.listener)
 
         try:
             while not self.isInterruptionRequested() and self.running:
-                event_id = self.image_port.listener.timed_wait_one(
+                ids, result = waitset.wait_and_process_with_timeout(
                     iceoryx2.Duration.from_millis(10)
                 )
+                
                 # Explicitly yield the GIL so the Qt main thread can process
                 # key/mouse events without waiting for iceoryx2's blocking call.
                 time.sleep(0)
                 
-                if event_id != self.image_port.event:
-                    continue
-                
-                sample = self.image_port.subscriber.receive()
-                if sample is not None:
-                    data = sample.payload()
-                    pixels = np.ctypeslib.as_array(data.contents.pixels).copy()
-                    del data, sample
-                    self.image_received.emit(pixels)
+                for event_id in ids:
+                    if event_id.has_event_from(image_guard):
+                        sample = self.image_port.subscriber.receive()
+                        if sample is not None:
+                            data = sample.payload()
+                            pixels = np.ctypeslib.as_array(data.contents.pixels).copy()
+                            del data, sample
+                            self.image_received.emit(pixels)
+
+                    elif event_id.has_event_from(telemetry_guard):
+                        sample = self.telemetry_port.subscriber.receive()
+                        if sample is not None:
+                            data = sample.payload()
+                            status_val = AppStatus(data.contents.status)
+                            self.status_changed.emit(APP_STATUS_TEXT.get(status_val, "Unknown State"))
+                            del data, sample
+
         except (iceoryx2.NodeWaitFailure, iceoryx2.ListenerWaitError, KeyboardInterrupt):
             pass
         except Exception as e:
             self.logger.error(f"{NODE_NAME} run error: {e}", exc_info=True)
+        finally:
+            if 'image_guard' in locals(): image_guard.delete()
+            if 'telemetry_guard' in locals(): telemetry_guard.delete()
+            if 'waitset' in locals(): waitset.delete()
 
-        self.status_changed.emit(DroneStatus.DISCONNECTED)
+        self.status_changed.emit(APP_STATUS_TEXT[AppStatus.DISCONNECTED])
 
 class ShortcutsDialog(QDialog):
     def __init__(self, parent=None):
@@ -168,7 +192,7 @@ class MainWindow(QMainWindow):
         self.image_receiver.image_received.connect(self.update_image)
         self.image_receiver.start()
 
-        self.statusBar().showMessage(DroneStatus.INITIALIZING)
+        self.statusBar().showMessage(APP_STATUS_TEXT[AppStatus.INITIALIZING])
         self._shortcuts_dialog = ShortcutsDialog(self)
 
         # Menu bar setup

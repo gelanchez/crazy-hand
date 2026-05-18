@@ -1,9 +1,10 @@
 import logging
 import sys
 import time
+
 from collections import deque
-from pathlib import Path
 from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 LOG_DIR = Path("data/logs")
 

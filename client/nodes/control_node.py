@@ -1,8 +1,10 @@
-import iceoryx2
 import logging
+
+import iceoryx2
+
+from client.common.constants import DEFAULT_HEIGHT, EventId, KeyCode, ServiceName, SPEED_FACTOR
 from client.common.node import Node
-from client.common.constants import ServiceName, EventId, KeyCode, SPEED_FACTOR, DEFAULT_HEIGHT
-from client.common.payloads import CommandData, ActionData
+from client.common.payloads import ActionData, CommandData
 
 class ControlNode(Node):
     def __init__(self, level=logging.INFO):
@@ -65,41 +67,37 @@ class ControlNode(Node):
             
             changed = True
             
-            if is_pressed:
-                if key == KeyCode.SPACE:
+            match (is_pressed, key):
+                case (True, KeyCode.SPACE):
                     self._active = True
-                elif key == KeyCode.ESC:
+                case (True, KeyCode.ESC | KeyCode.WINDOW_CLOSED):
                     self._active = False
                     self._hover["vx"] = self._hover["vy"] = self._hover["yawrate"] = 0.0
-                elif key == KeyCode.UP:
+                case (True, KeyCode.UP):
                     self._hover["vx"] = SPEED_FACTOR
-                elif key == KeyCode.DOWN:
+                case (True, KeyCode.DOWN):
                     self._hover["vx"] = -SPEED_FACTOR
-                elif key == KeyCode.LEFT:
+                case (True, KeyCode.LEFT):
                     self._hover["vy"] = SPEED_FACTOR
-                elif key == KeyCode.RIGHT:
+                case (True, KeyCode.RIGHT):
                     self._hover["vy"] = -SPEED_FACTOR
-                elif key == KeyCode.A:
+                case (True, KeyCode.A):
                     self._hover["yawrate"] = -70.0
-                elif key == KeyCode.D:
+                case (True, KeyCode.D):
                     self._hover["yawrate"] = 70.0
-                elif key == KeyCode.Z:
+                case (True, KeyCode.Z):
                     self._hover["yawrate"] = -200.0
-                elif key == KeyCode.X:
+                case (True, KeyCode.X):
                     self._hover["yawrate"] = 200.0
-                elif key == KeyCode.W:
+                case (True, KeyCode.W):
                     self._hover["zdistance"] = min(2.0, self._hover["zdistance"] + 0.1)
-                elif key == KeyCode.S:
+                case (True, KeyCode.S):
                     self._hover["zdistance"] = max(0.1, self._hover["zdistance"] - 0.1)
-                elif key == KeyCode.WINDOW_CLOSED:
-                    self._active = False
-                    self._hover["vx"] = self._hover["vy"] = self._hover["yawrate"] = 0.0
-            else:
-                if key in (KeyCode.UP, KeyCode.DOWN):
+                case (False, KeyCode.UP | KeyCode.DOWN):
                     self._hover["vx"] = 0.0
-                elif key in (KeyCode.LEFT, KeyCode.RIGHT):
+                case (False, KeyCode.LEFT | KeyCode.RIGHT):
                     self._hover["vy"] = 0.0
-                elif key in (KeyCode.A, KeyCode.D, KeyCode.Z, KeyCode.X):
+                case (False, KeyCode.A | KeyCode.D | KeyCode.Z | KeyCode.X):
                     self._hover["yawrate"] = 0.0
 
         if changed:
