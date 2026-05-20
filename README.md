@@ -40,14 +40,14 @@ Follow steps in [Install Grafana](https://grafana.com/docs/grafana/latest/setup-
 
 To [start Grafana](https://grafana.com/docs/grafana/latest/setup-grafana/start-restart-grafana/), execute the following statements to configure Grafana to start automatically using systemd:
 
-```text
+```bash
 sudo /bin/systemctl daemon-reload
 sudo /bin/systemctl enable grafana-server
 ```
 
 Start grafana-server by executing:
 
-```text
+```bash
 sudo /bin/systemctl start grafana-server
 ```
 
@@ -65,6 +65,7 @@ Start QuestDB:
 ```bash
 # Local folder installation
 cd path_to_QuestDB/bin
+# cd ~/apps/questdb-9.3.5-rt-linux-x86-64/bin
 ./questdb.sh start
 
 # Docker image:

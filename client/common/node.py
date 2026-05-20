@@ -17,11 +17,13 @@ class PublisherPort:
     notifier: object
     event: object
 
+
 @dataclass
 class SubscriberPort:
     subscriber: object
     listener: object
     event: object
+
 
 @dataclass
 class BlackboardEntry:

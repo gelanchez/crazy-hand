@@ -310,7 +310,7 @@ class MainWindow(QMainWindow):
             sample = self.command_port.publisher.loan_uninit()
             p = sample.payload().contents
             p.key = key
-            p.is_pressed = 1 if is_pressed else 0
+            p.is_pressed = is_pressed
             sample.assume_init().send()
             self.command_port.notifier.notify_with_custom_event_id(self.command_port.event)
         except Exception as e:

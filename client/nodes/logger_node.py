@@ -1,4 +1,6 @@
 import logging
+import queue
+import threading
 
 import iceoryx2
 
@@ -21,6 +23,25 @@ class LoggerNode(Node):
     def __init__(self, level=logging.INFO):
         super().__init__(NODE_NAME, level=level)
         self.database = Database()
+        # Background thread for non-blocking image saves
+        self._save_queue: queue.Queue = queue.Queue(maxsize=10)
+        self._save_thread = threading.Thread(target=self._image_save_worker, daemon=True)
+        self._save_thread.start()
+
+    def _image_save_worker(self):
+        """Consume (pixels_bytes, path) tuples and write them to disk."""
+        while True:
+            item = self._save_queue.get() # TODO Should we add a timeout and catch the exception?
+            if item is None:  # sentinel — shut down
+                break
+            pixels_bytes, path = item
+            try:
+                image = Image.frombuffer("L", (IMAGE_WIDTH, IMAGE_HEIGHT), pixels_bytes, "raw", "L", 0, 1)
+                image.save(path)
+            except Exception as e:
+                self.logger.warning(f"Image save failed: {e}")
+            finally:
+                self._save_queue.task_done()
 
     def run(self):
         # 1. Setup Ports
@@ -68,13 +89,14 @@ class LoggerNode(Node):
                             save_images = self.blackboard_read(self.blackboard_reader, "save_images")
                             if save_images:
                                 data = sample.payload()
-                                image = Image.frombuffer(
-                                    "L", (IMAGE_WIDTH, IMAGE_HEIGHT),
-                                    data.contents.pixels, "raw", "L", 0, 1,
-                                )
-                                image_name = f"{data.contents.timestamp}.png" # TODO jpg
-                                image.save(IMAGES_PATH / image_name)
-                                self.logger.debug(f"Saved {data.contents}")
+                                # Copy pixels out of shared memory before releasing the sample
+                                pixels_bytes = bytes(data.contents.pixels)
+                                image_name = f"{data.contents.timestamp}.png"
+                                try:
+                                    self._save_queue.put_nowait((pixels_bytes, IMAGES_PATH / image_name))
+                                    self.logger.debug(f"Enqueued save: {image_name}")
+                                except queue.Full:
+                                    self.logger.warning("Image save queue full — dropping frame")
                             del sample
 
                     # Handle Telemetry Event
@@ -119,6 +141,8 @@ class LoggerNode(Node):
             telemetry_guard.delete()
             action_guard.delete()
             waitset.delete()
+            self._save_queue.put(None)  # signal save worker to stop
+            self._save_thread.join(timeout=5)
             self.database.close()
             self.logger.info(f"{NODE_NAME} shut down")
 

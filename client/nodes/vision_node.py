@@ -1,7 +1,9 @@
 import logging
 import time
 
+import cv2
 import iceoryx2
+import ctypes
 import numpy as np
 from pathlib import Path
 
@@ -17,7 +19,7 @@ from client.common.constants import (
     ServiceName,
 )
 from client.common.node import Node
-from client.common.payloads import ImageData
+from client.common.payloads import ImageData, PerceptionData
 
 
 NODE_NAME = "vision_node"
@@ -102,7 +104,7 @@ class VisionNode(Node):
 
                 self.logger.info(
                     f"[CONFIRMED] Gesture: {candidate} "
-                    f"({confidence:.2f if confidence else 0.0}) "
+                    f"({confidence if confidence is not None else 0.0:.2f}) "
                     f"stable for {int(elapsed)}ms"
                 )
 
@@ -116,6 +118,12 @@ class VisionNode(Node):
             ServiceName.IMAGE,
             ImageData,
             EventId.IMAGE_READY,
+        )
+
+        self.perception_port = self.create_publisher(
+            ServiceName.PERCEPTION,
+            PerceptionData,
+            EventId.PERCEPTION_READY,
         )
 
         if self.image_port.subscriber is None:
@@ -132,7 +140,17 @@ class VisionNode(Node):
                 if event_id != self.image_port.event:
                     continue
 
-                sample = self.image_port.subscriber.receive()
+                # Drain the queue: discard stale frames, keep only the latest.
+                # This prevents compounding lag when inference is slower than camera FPS.
+                sample = None
+                while True:
+                    new_sample = self.image_port.subscriber.receive()
+                    if new_sample is None:
+                        break
+                    if sample is not None:
+                        del sample  # discard stale frame
+                    sample = new_sample
+
                 if sample is None:
                     continue
 
@@ -145,6 +163,8 @@ class VisionNode(Node):
                     # ======================================================
                     payload = sample.payload()
                     raw_ptr = payload.contents.pixels
+                    img_id = payload.contents.id
+                    img_timestamp = payload.contents.timestamp
 
                     pixels = np.frombuffer(
                         np.ctypeslib.as_array(raw_ptr),
@@ -155,12 +175,12 @@ class VisionNode(Node):
                 finally:
                     del sample
 
+
                 # ======================================================
                 # IMAGE PREP
                 # ======================================================
                 pixels = pixels.reshape((IMAGE_HEIGHT, IMAGE_WIDTH))
-
-                pixels = np.stack((pixels,) * 3, axis=-1)
+                pixels = np.ascontiguousarray(np.stack((pixels,) * 3, axis=-1))
 
                 mp_image = mp.Image(
                     image_format=mp.ImageFormat.SRGB,
@@ -175,20 +195,18 @@ class VisionNode(Node):
                 # ======================================================
                 # HAND CHECK
                 # ======================================================
-                if not results.hand_landmarks:
-                    self.logger.info("No hand detected")
-                    continue
+                pixel_x, pixel_y = 0, 0
+                if results.hand_landmarks:
+                    landmarks = results.hand_landmarks[0]
 
-                landmarks = results.hand_landmarks[0]
+                    xs = [lm.x for lm in landmarks]
+                    ys = [lm.y for lm in landmarks]
 
-                xs = [lm.x for lm in landmarks]
-                ys = [lm.y for lm in landmarks]
+                    cx = sum(xs) / len(xs)
+                    cy = sum(ys) / len(ys)
 
-                cx = sum(xs) / len(xs)
-                cy = sum(ys) / len(ys)
-
-                pixel_x = int(cx * IMAGE_WIDTH)
-                pixel_y = int(cy * IMAGE_HEIGHT)
+                    pixel_x = int(cx * IMAGE_WIDTH)
+                    pixel_y = int(cy * IMAGE_HEIGHT)
 
                 # ======================================================
                 # GESTURE EXTRACTION
@@ -210,13 +228,69 @@ class VisionNode(Node):
                 )
 
                 # ======================================================
-                # LOGGING
+                # LOGGING & OVERLAY DATA
                 # ======================================================
-                self.logger.info(
-                    f"Hand @ ({pixel_x},{pixel_y}) | "
-                    f"Raw: {gesture_name} ({confidence}) | "
-                    f"Stable: {stable_gesture}"
-                )
+                if results.hand_landmarks:
+                    self.logger.info(
+                        f"Hand @ ({pixel_x},{pixel_y}) | "
+                        f"Raw: {gesture_name} ({confidence}) | "
+                        f"Stable: {stable_gesture}"
+                    )
+                    
+                    # Draw on the RGB pixels array.
+                    for lm in landmarks:
+                        px = int(lm.x * IMAGE_WIDTH)
+                        py = int(lm.y * IMAGE_HEIGHT)
+                        cv2.circle(pixels, (px, py), 2, (255, 0, 0), -1)  # Red dots for joints
+
+                    cv2.circle(pixels, (pixel_x, pixel_y), 5, (0, 255, 0), -1)  # Green dot for center
+                    
+                    if stable_gesture:
+                        text = f"{stable_gesture} ({confidence:.2f})"
+                        cv2.putText(
+                            pixels,
+                            text,
+                            (10, 30),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.7,
+                            (0, 255, 0), # Green text
+                            2,
+                            cv2.LINE_AA
+                        )
+                else:
+                    self.logger.info("No hand detected")
+
+                # ======================================================
+                # PUBLISH PERCEPTION DATA
+                # ======================================================
+                perc_sample = self.perception_port.publisher.loan_uninit()
+                if perc_sample is not None:
+                    data = perc_sample.payload()
+                    data.contents.id = img_id
+                    data.contents.timestamp = img_timestamp
+
+                    if results.hand_landmarks and stable_gesture:
+                        data.contents.hand_detected = True
+                        data.contents.hand_x = pixel_x
+                        data.contents.hand_y = pixel_y
+                        data.contents.gesture_name = stable_gesture.encode('utf-8')
+                        data.contents.gesture_confidence = confidence if confidence else 0.0
+                    else:
+                        data.contents.hand_detected = False
+                        data.contents.hand_x = 0
+                        data.contents.hand_y = 0
+                        data.contents.gesture_name = b"NONE"
+                        data.contents.gesture_confidence = 0.0
+
+                    processed_flat = pixels.flatten()
+                    ctypes.memmove(
+                        data.contents.processed_pixels,
+                        processed_flat.ctypes.data_as(ctypes.POINTER(ctypes.c_ubyte)),
+                        len(processed_flat)
+                    )
+
+                    perc_sample.assume_init().send()
+                    self.perception_port.notifier.notify_with_custom_event_id(self.perception_port.event)
 
         except (iceoryx2.NodeWaitFailure, iceoryx2.ListenerWaitError):
             pass

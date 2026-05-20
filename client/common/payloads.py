@@ -5,11 +5,11 @@ from client.common.constants import AppStatus, IMAGE_SIZE
 
 class ActionData(ctypes.Structure):
     _fields_ = [
+        ("active",    ctypes.c_bool),
         ("vx",        ctypes.c_float),
         ("vy",        ctypes.c_float),
         ("yawrate",   ctypes.c_float),
         ("zdistance", ctypes.c_float),
-        ("active",    ctypes.c_uint8),
         ("_pad",      ctypes.c_uint8 * 3), # TODO needed?
     ]
 
@@ -23,7 +23,7 @@ class ActionData(ctypes.Structure):
 class CommandData(ctypes.Structure):
     _fields_ = [
         ("key", ctypes.c_uint8),
-        ("is_pressed", ctypes.c_uint8),
+        ("is_pressed", ctypes.c_bool),
     ]
 
     def __str__(self) -> str:
@@ -39,6 +39,24 @@ class ImageData(ctypes.Structure):
 
     def __str__(self) -> str:
         return f"ImageData(id={self.id}, timestamp={self.timestamp}, size={len(self.pixels)})"
+
+
+class PerceptionData(ctypes.Structure):
+    _fields_ = [
+        ("id", ctypes.c_uint64),
+        ("timestamp", ctypes.c_uint64),
+        ("hand_detected", ctypes.c_bool),
+        ("hand_x", ctypes.c_uint16),
+        ("hand_y", ctypes.c_uint16),
+        ("gesture_name", ctypes.c_char * 32),
+        ("gesture_confidence", ctypes.c_float),
+        ("processed_pixels", ctypes.c_ubyte * (IMAGE_SIZE * 3)),
+    ]
+
+    def __str__(self) -> str:
+        if self.hand_detected:
+            return f"PerceptionData(gesture='{self.gesture_name.decode('utf-8')}', confidence={self.gesture_confidence:.2f})"
+        return "PerceptionData(no hand detected)"
 
 
 class TelemetryData(ctypes.Structure):

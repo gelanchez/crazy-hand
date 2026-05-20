@@ -22,11 +22,21 @@ class TelemetrySample:
 @dataclass
 class ActionSample:
     ts: datetime
-    active: int
+    active: bool
     vx: float
     vy: float
     yawrate: float
     zdistance: float
+
+
+@dataclass
+class PerceptionSample:
+    ts: datetime
+    hand_detected: bool
+    hand_x: int
+    hand_y: int
+    gesture_name: str
+    gesture_confidence: float
 
 
 class Database:
@@ -68,7 +78,7 @@ class Database:
             logger.error(f"Unexpected error connecting to QuestDB: {e}")
             return False
 
-    def log(self, sample: Union[TelemetrySample, ActionSample]):
+    def log(self, sample: Union[TelemetrySample, ActionSample, PerceptionSample]):
         if self.closed:
             return
 
