@@ -184,7 +184,7 @@ class MainWindow(QMainWindow):
         self.blackboard_reader = self.image_receiver.create_blackboard_reader("/config", CONFIG)
 
         # Command publisher setup
-        self._cmd_port = self.command_node.create_publisher(ServiceName.COMMAND, CommandData, EventId.COMMAND_READY)
+        self.command_port = self.command_node.create_publisher(ServiceName.COMMAND, CommandData, EventId.COMMAND_READY)
 
         self.image_receiver.status_changed.connect(self.statusBar().showMessage)
         self.image_receiver.image_received.connect(self.update_image)
@@ -305,14 +305,14 @@ class MainWindow(QMainWindow):
         )
 
     def _publish_command(self, key: KeyCode, is_pressed: bool):
-        if self._cmd_port is None: return
+        if self.command_port is None: return
         try:
-            sample = self._cmd_port.publisher.loan_uninit()
+            sample = self.command_port.publisher.loan_uninit()
             p = sample.payload().contents
             p.key = key
             p.is_pressed = 1 if is_pressed else 0
             sample.assume_init().send()
-            self._cmd_port.notifier.notify_with_custom_event_id(self._cmd_port.event)
+            self.command_port.notifier.notify_with_custom_event_id(self.command_port.event)
         except Exception as e:
             logger.warning(f"Command publish failed: {e}")
     

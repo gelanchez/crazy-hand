@@ -72,7 +72,7 @@ class LoggerNode(Node):
                                     "L", (IMAGE_WIDTH, IMAGE_HEIGHT),
                                     data.contents.pixels, "raw", "L", 0, 1,
                                 )
-                                image_name = f"{data.contents.timestamp}.png"
+                                image_name = f"{data.contents.timestamp}.png" # TODO jpg
                                 image.save(IMAGES_PATH / image_name)
                                 self.logger.debug(f"Saved {data.contents}")
                             del sample

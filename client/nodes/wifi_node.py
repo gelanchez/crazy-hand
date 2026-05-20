@@ -363,7 +363,7 @@ class WifiNode(Node):
                 _x = np.arange(IMAGE_WIDTH, dtype=np.uint16).reshape(1, -1)
                 threading.Thread(target=self._telemetry_loop, daemon=True).start()
                 while self.running:
-                    self.node.wait(iceoryx2.Duration.from_millis(100))
+                    self.node.wait(iceoryx2.Duration.from_millis(100)) # TODO magic number
                     if not self.running: break
                     sample = self.image_port.publisher.loan_uninit()
                     payload = sample.payload().contents
@@ -412,7 +412,7 @@ class WifiNode(Node):
 
                 if not self.running: return
 
-                # 2. NOW INITIALIZE ICEORYX2
+                # 2. NOW INITIALIZE ICEORYX2 # TODO why after?
                 self.image_port = self.create_publisher(ServiceName.IMAGE, ImageData, EventId.IMAGE_READY)
                 self.telemetry_port = self.create_publisher(ServiceName.TELEMETRY, TelemetryData, EventId.TELEMETRY_READY)
 
@@ -435,8 +435,6 @@ class WifiNode(Node):
                 self.logger.info("Node fully operational, receiving frames and commands...")
 
                 # Main loop: just keep the process alive.
-                # Action sending is handled by _action_loop.
-                # Image reception is handled by _receive_images.
                 while self.running:
                     time.sleep(0.5)
 

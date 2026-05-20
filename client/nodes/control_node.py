@@ -15,15 +15,15 @@ class ControlNode(Node):
     def run(self):
         self.logger.info(f"{self.name} running")
         
-        self.cmd_port = self.create_subscriber(ServiceName.COMMAND, CommandData, EventId.COMMAND_READY)
+        self.command_port = self.create_subscriber(ServiceName.COMMAND, CommandData, EventId.COMMAND_READY)
         self.action_port = self.create_publisher(ServiceName.ACTION, ActionData, EventId.ACTION_READY)
         
-        if self.cmd_port is None or self.cmd_port.subscriber is None or self.action_port is None or self.action_port.publisher is None:
+        if self.command_port is None or self.command_port.subscriber is None or self.action_port is None or self.action_port.publisher is None:
             self.logger.error("Failed to create ports")
             return
 
         waitset = iceoryx2.WaitSetBuilder.new().create(iceoryx2.ServiceType.Ipc)
-        cmd_guard = waitset.attach_notification(self.cmd_port.listener)
+        cmd_guard = waitset.attach_notification(self.command_port.listener)
 
         try:
             while self.running:
@@ -52,7 +52,7 @@ class ControlNode(Node):
         changed = False
         while True:
             try:
-                sample = self.cmd_port.subscriber.receive()
+                sample = self.command_port.subscriber.receive()
             except Exception as e:
                 self.logger.warning(f"Command receive error: {e}")
                 break

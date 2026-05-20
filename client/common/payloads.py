@@ -1,17 +1,6 @@
 import ctypes
 
-from client.common.constants import IMAGE_SIZE
-
-
-class ImageData(ctypes.Structure):
-    _fields_ = [
-        ("id", ctypes.c_uint64),
-        ("timestamp", ctypes.c_uint64),
-        ("pixels", ctypes.c_ubyte * IMAGE_SIZE),
-    ]
-
-    def __str__(self) -> str:
-        return f"ImageData(id={self.id}, timestamp={self.timestamp}, size={len(self.pixels)})"
+from client.common.constants import AppStatus, IMAGE_SIZE
 
 
 class ActionData(ctypes.Structure):
@@ -21,7 +10,7 @@ class ActionData(ctypes.Structure):
         ("yawrate",   ctypes.c_float),
         ("zdistance", ctypes.c_float),
         ("active",    ctypes.c_uint8),
-        ("_pad",      ctypes.c_uint8 * 3),
+        ("_pad",      ctypes.c_uint8 * 3), # TODO needed?
     ]
 
     def __str__(self) -> str:
@@ -41,16 +30,26 @@ class CommandData(ctypes.Structure):
         return f"CommandData(key={self.key}, is_pressed={self.is_pressed})"
 
 
-class TelemetryData(ctypes.Structure):
+class ImageData(ctypes.Structure):
     _fields_ = [
-        ("fps", ctypes.c_float),
-        ("status", ctypes.c_uint8),
+        ("id", ctypes.c_uint64),
+        ("timestamp", ctypes.c_uint64),
+        ("pixels", ctypes.c_ubyte * IMAGE_SIZE),
     ]
 
     def __str__(self) -> str:
-        from client.common.constants import AppStatus
+        return f"ImageData(id={self.id}, timestamp={self.timestamp}, size={len(self.pixels)})"
+
+
+class TelemetryData(ctypes.Structure):
+    _fields_ = [
+        ("status", ctypes.c_uint8),
+        ("fps", ctypes.c_float),
+    ]
+
+    def __str__(self) -> str:
         try:
             status_str = AppStatus(self.status).name
         except ValueError:
             status_str = "UNKNOWN"
-        return f"TelemetryData(fps={self.fps:.1f}, status={status_str})"
+        return f"TelemetryData(status={status_str}, fps={self.fps:.1f})"

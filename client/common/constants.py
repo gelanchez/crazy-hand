@@ -14,7 +14,7 @@ class ServiceName(StrEnum):
     ACTION = "/action"
     COMMAND = "/command"
     IMAGE = "/image"
-    PROCESSED = "/processed"
+    PERCEPTION = "/perception"
     TELEMETRY = "/telemetry"
 
 # iceoryx2 events
@@ -24,7 +24,7 @@ class EventId(IntEnum):
     ACTION_READY = auto()
     COMMAND_READY = auto()
     IMAGE_READY = auto()
-    PROCESSED_READY = auto()
+    PERCEPTION_READY = auto()
     TELEMETRY_READY = auto()
 
 # Image Configuration
@@ -35,8 +35,8 @@ IMAGE_SIZE = IMAGE_WIDTH * IMAGE_HEIGHT
 @unique
 class AppStatus(IntEnum):
     DISCONNECTED = 0
-    CONNECTED = 1
-    SIMULATING = 2
+    CONNECTED = auto()
+    SIMULATING = auto()
 
 # GUI
 IMAGE_SCALING_FACTOR = 2 # 1 for original, 2 for upscaled

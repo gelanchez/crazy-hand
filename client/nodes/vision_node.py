@@ -127,7 +127,6 @@ class VisionNode(Node):
 
         try:
             while self.running:
-
                 event_id = self.image_port.listener.timed_wait_one(iceoryx2.Duration.from_millis(500))
 
                 if event_id != self.image_port.event:

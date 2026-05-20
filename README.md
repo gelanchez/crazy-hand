@@ -1,5 +1,15 @@
 # crazyflie-tfm
 
+## ARCHITECTURE
+
+| Publisher      | Topic         | Subscriber(s)                             |
+| -------------- | ------------- | ----------------------------------------- |
+| `control_node` | `/action`     | `logger_node`, `wifi_node`                |
+| `gui_node`     | `/command`    | `control_node`                            |
+| `vision_node`  | `/perception` | `control_node`, `gui_node`, `logger_node` |
+| `wifi_node`    | `/telemetry`  | `control_node`, `gui_node`, `logger_node` |
+| `wifi_node`    | `/image`      | `gui_node`, `logger_node`, `vision_node`  |
+
 ## INSTALLATION
 
 ### Dependencies
@@ -22,7 +32,7 @@ pip install .
 
 ### Mediapipe
 
-Download [HandLandmarker model](https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task) and [HandGestureClassifier](https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/latest/gesture_recognizer.task) and place them in `data` folder.
+Download [HandGestureClassifier](https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/latest/gesture_recognizer.task) and place it in the `data` folder.
 
 ### Grafana
 
@@ -31,9 +41,9 @@ Follow steps in [Install Grafana](https://grafana.com/docs/grafana/latest/setup-
 To [start Grafana](https://grafana.com/docs/grafana/latest/setup-grafana/start-restart-grafana/), execute the following statements to configure Grafana to start automatically using systemd:
 
 ```text
- sudo /bin/systemctl daemon-reload
- sudo /bin/systemctl enable grafana-server
- ```
+sudo /bin/systemctl daemon-reload
+sudo /bin/systemctl enable grafana-server
+```
 
 Start grafana-server by executing:
 
@@ -136,7 +146,7 @@ We support two modes of flashing via the Crazyradio PA dongle:
 
    ```bash
    make flash
-   
+
    # Override radio URI (default is radio://0/80/2M/E7E7E7E7E7)
    make flash URI=radio://0/80/2M/E7E7E7E7E7
    ```
@@ -161,16 +171,6 @@ make flash-jtag
 ```bash
 make clean
 ```
-
-## ARCHITECTURE
-
-| Publisher | Topic | Subscriber(s) |
-| --- | --- | --- |
-| `gui_node` | `/command` | `control_node` |
-| `control_node` | `/action` | `logger_node`, `wifi_node` |
-| `wifi_node` | `/telemetry` | `control_node`, `logger_node`, `gui_node` |
-| `wifi_node` | `/image` | `logger_node`, `gui_node`, `vision_node` |
-| `vision_node` | `/processed` | `gui_node`, `logger_node`, `control_node` |
 
 ## RUN CLIENT
 
@@ -212,7 +212,5 @@ If you get `Failed to flash: [Errno 13] Access denied (insufficient permissions)
 
 ## LINKS
 
-- <https://ai.google.dev/edge/mediapipe/solutions/vision/hand_landmarker/python>
-- <https://ai.google.dev/edge/mediapipe/solutions/vision/hand_landmarker/index#models>
 - <https://ai.google.dev/edge/mediapipe/solutions/setup_python>
 - <https://ai.google.dev/edge/mediapipe/solutions/vision/gesture_recognizer>
