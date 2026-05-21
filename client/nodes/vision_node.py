@@ -26,6 +26,15 @@ NODE_NAME = "vision_node"
 MODEL_PATH = Path("./data/gesture_recognizer.task")
 
 
+def to_c_char_array(value: str, size: int = 32) -> bytes:
+    """
+    Convert Python string to fixed-size null-padded bytes
+    suitable for ctypes.c_char * size fields.
+    """
+    encoded = value.encode("utf-8")[: size - 1]
+    return encoded + b"\x00" * (size - len(encoded))
+
+
 class VisionNode(Node):
     def __init__(self, level=logging.DEBUG):
         super().__init__(NODE_NAME, level=level)
@@ -49,9 +58,9 @@ class VisionNode(Node):
         # =========================================================
         # GESTURE FILTERING PARAMETERS
         # =========================================================
-        self.confidence_threshold = 0.65          # ignore weak predictions
-        self.debounce_ms = 300                    # stable time required
-        self.hysteresis_ms = 200                  # prevents fast switching back
+        self.confidence_threshold = 0.65  # ignore weak predictions
+        self.debounce_ms = 300  # stable time required
+        self.hysteresis_ms = 200  # prevents fast switching back
 
         # state tracking
         self.current_candidate = None
@@ -91,7 +100,6 @@ class VisionNode(Node):
         # DEBOUNCE (STABILITY CHECK)
         # -------------------------
         if elapsed >= self.debounce_ms:
-
             # -------------------------
             # HYSTERESIS CHECK
             # -------------------------
@@ -135,7 +143,9 @@ class VisionNode(Node):
 
         try:
             while self.running:
-                event_id = self.image_port.listener.timed_wait_one(iceoryx2.Duration.from_millis(500))
+                event_id = self.image_port.listener.timed_wait_one(
+                    iceoryx2.Duration.from_millis(500)
+                )
 
                 if event_id != self.image_port.event:
                     continue
@@ -155,7 +165,9 @@ class VisionNode(Node):
                     continue
 
                 try:
-                    if not self.blackboard_read(self.blackboard_reader, "process_images"):
+                    if not self.blackboard_read(
+                        self.blackboard_reader, "process_images"
+                    ):
                         continue
 
                     # ======================================================
@@ -174,7 +186,6 @@ class VisionNode(Node):
 
                 finally:
                     del sample
-
 
                 # ======================================================
                 # IMAGE PREP
@@ -236,15 +247,19 @@ class VisionNode(Node):
                         f"Raw: {gesture_name} ({confidence}) | "
                         f"Stable: {stable_gesture}"
                     )
-                    
+
                     # Draw on the RGB pixels array.
                     for lm in landmarks:
                         px = int(lm.x * IMAGE_WIDTH)
                         py = int(lm.y * IMAGE_HEIGHT)
-                        cv2.circle(pixels, (px, py), 2, (255, 0, 0), -1)  # Red dots for joints
+                        cv2.circle(
+                            pixels, (px, py), 2, (255, 0, 0), -1
+                        )  # Red dots for joints
 
-                    cv2.circle(pixels, (pixel_x, pixel_y), 5, (0, 255, 0), -1)  # Green dot for center
-                    
+                    cv2.circle(
+                        pixels, (pixel_x, pixel_y), 5, (0, 255, 0), -1
+                    )  # Green dot for center
+
                     if stable_gesture:
                         text = f"{stable_gesture} ({confidence:.2f})"
                         cv2.putText(
@@ -253,9 +268,9 @@ class VisionNode(Node):
                             (10, 30),
                             cv2.FONT_HERSHEY_SIMPLEX,
                             0.7,
-                            (0, 255, 0), # Green text
+                            (0, 255, 0),  # Green text
                             2,
-                            cv2.LINE_AA
+                            cv2.LINE_AA,
                         )
                 else:
                     self.logger.info("No hand detected")
@@ -273,24 +288,28 @@ class VisionNode(Node):
                         data.contents.hand_detected = True
                         data.contents.hand_x = pixel_x
                         data.contents.hand_y = pixel_y
-                        data.contents.gesture_name = stable_gesture.encode('utf-8')
-                        data.contents.gesture_confidence = confidence if confidence else 0.0
+                        data.contents.gesture_name = to_c_char_array(stable_gesture)
+                        data.contents.gesture_confidence = (
+                            confidence if confidence else 0.0
+                        )
                     else:
                         data.contents.hand_detected = False
                         data.contents.hand_x = 0
                         data.contents.hand_y = 0
-                        data.contents.gesture_name = b"NONE"
+                        data.contents.gesture_name = to_c_char_array("NONE")
                         data.contents.gesture_confidence = 0.0
 
                     processed_flat = pixels.flatten()
                     ctypes.memmove(
                         data.contents.processed_pixels,
                         processed_flat.ctypes.data_as(ctypes.POINTER(ctypes.c_ubyte)),
-                        len(processed_flat)
+                        len(processed_flat),
                     )
 
                     perc_sample.assume_init().send()
-                    self.perception_port.notifier.notify_with_custom_event_id(self.perception_port.event)
+                    self.perception_port.notifier.notify_with_custom_event_id(
+                        self.perception_port.event
+                    )
 
         except (iceoryx2.NodeWaitFailure, iceoryx2.ListenerWaitError):
             pass

@@ -9,21 +9,16 @@ from pathlib import Path
 LOG_DIR = Path("data/logs")
 
 _LEVEL_COLORS = {
-    "DEBUG": "\033[94m",    # Blue
-    "INFO": "\033[92m",     # Green
+    "DEBUG": "\033[94m",  # Blue
+    "INFO": "\033[92m",  # Green
     "WARNING": "\033[93m",  # Yellow
-    "ERROR": "\033[91m",    # Red
-    "CRITICAL": "\033[95m", # Magenta
+    "ERROR": "\033[91m",  # Red
+    "CRITICAL": "\033[95m",  # Magenta
 }
 
 _RESET = "\033[0m"
 
-_FMT = (
-    "%(asctime)s.%(msecs)03.0f "
-    "%(levelname)-7s "
-    "[%(name)s:%(lineno)d] "
-    "%(message)s"
-)
+_FMT = "%(asctime)s.%(msecs)03.0f %(levelname)-7s [%(name)s:%(lineno)d] %(message)s"
 
 _DATEFMT = "%H:%M:%S"
 
@@ -70,7 +65,8 @@ def setup_logging(
             LOG_DIR / f"{name}.log",
             maxBytes=1_000_000,  # 1 MB
             backupCount=1,
-            encoding="utf-8")
+            encoding="utf-8",
+        )
         file_handler.setLevel(level)
         file_handler.setFormatter(plain_formatter)
         logger.addHandler(file_handler)

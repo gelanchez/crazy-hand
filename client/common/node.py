@@ -88,7 +88,7 @@ class Node:
         event = iceoryx2.EventId.new(event_id)
 
         self.logger.info(f"{name} service created")
-        self.logger.info(f"Event {event_id} created")
+        self.logger.info(f"Event {event_id.name} created")
 
         return PublisherPort(publisher=publisher, notifier=notifier, event=event)
 
@@ -130,7 +130,7 @@ class Node:
         if event_service is None:
             return None
 
-        self.logger.info(f"Event {event_id} connected")
+        self.logger.info(f"Event {event_id.name} connected")
         listener = event_service.listener_builder().create()
         event_id = iceoryx2.EventId.new(event_id)
 

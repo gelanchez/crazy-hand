@@ -2,24 +2,49 @@ import logging
 
 import iceoryx2
 
-from client.common.constants import DEFAULT_HEIGHT, EventId, KeyCode, ServiceName, SPEED_FACTOR
+from client.common.constants import (
+    DEFAULT_HEIGHT,
+    EventId,
+    KeyCode,
+    ServiceName,
+    SPEED_FACTOR,
+)
 from client.common.node import Node
 from client.common.payloads import ActionData, CommandData, PerceptionData
+
 
 class ControlNode(Node):
     def __init__(self, level=logging.INFO):
         super().__init__("control_node", level=level)
         self._active = False
-        self._hover = {"vx": 0.0, "vy": 0.0, "yawrate": 0.0, "zdistance": DEFAULT_HEIGHT}
+        self._hover = {
+            "vx": 0.0,
+            "vy": 0.0,
+            "yawrate": 0.0,
+            "zdistance": DEFAULT_HEIGHT,
+        }
 
     def run(self):
         self.logger.info(f"{self.name} running")
-        
-        self.command_port = self.create_subscriber(ServiceName.COMMAND, CommandData, EventId.COMMAND_READY)
-        self.perception_port = self.create_subscriber(ServiceName.PERCEPTION, PerceptionData, EventId.PERCEPTION_READY)
-        self.action_port = self.create_publisher(ServiceName.ACTION, ActionData, EventId.ACTION_READY)
-        
-        if self.command_port is None or self.command_port.subscriber is None or self.perception_port is None or self.perception_port.subscriber is None or self.action_port is None or self.action_port.publisher is None:
+
+        self.command_port = self.create_subscriber(
+            ServiceName.COMMAND, CommandData, EventId.COMMAND_READY
+        )
+        self.perception_port = self.create_subscriber(
+            ServiceName.PERCEPTION, PerceptionData, EventId.PERCEPTION_READY
+        )
+        self.action_port = self.create_publisher(
+            ServiceName.ACTION, ActionData, EventId.ACTION_READY
+        )
+
+        if (
+            self.command_port is None
+            or self.command_port.subscriber is None
+            or self.perception_port is None
+            or self.perception_port.subscriber is None
+            or self.action_port is None
+            or self.action_port.publisher is None
+        ):
             self.logger.error("Failed to create ports")
             return
 
@@ -33,8 +58,10 @@ class ControlNode(Node):
                     iceoryx2.Duration.from_millis(100)
                 )
 
-                if result in (iceoryx2.WaitSetRunResult.Interrupt, 
-                              iceoryx2.WaitSetRunResult.TerminationRequest):
+                if result in (
+                    iceoryx2.WaitSetRunResult.Interrupt,
+                    iceoryx2.WaitSetRunResult.TerminationRequest,
+                ):
                     self.running = False
                     break
 
@@ -43,7 +70,11 @@ class ControlNode(Node):
                         self._process_command()
                     elif event_id.has_event_from(perception_guard):
                         self._process_perception()
-        except (iceoryx2.NodeWaitFailure, iceoryx2.ListenerWaitError, KeyboardInterrupt):
+        except (
+            iceoryx2.NodeWaitFailure,
+            iceoryx2.ListenerWaitError,
+            KeyboardInterrupt,
+        ):
             pass
         except Exception as e:
             self.logger.error(f"ControlNode error: {e}", exc_info=True)
@@ -78,14 +109,14 @@ class ControlNode(Node):
 
             if sample is None:
                 break
-                
-            cmd = sample.payload().contents
-            key = cmd.key
-            is_pressed = cmd.is_pressed
-            del cmd, sample
-            
+
+            command = sample.payload().contents
+            key = command.key
+            is_pressed = command.is_pressed
+            del command, sample
+
             changed = True
-            
+
             match (is_pressed, key):
                 case (True, KeyCode.SPACE):
                     self._active = True
@@ -126,17 +157,28 @@ class ControlNode(Node):
         try:
             sample = self.action_port.publisher.loan_uninit()
             p = sample.payload().contents
-            p.vx, p.vy, p.yawrate, p.zdistance = self._hover["vx"], self._hover["vy"], self._hover["yawrate"], self._hover["zdistance"]
+            p.vx, p.vy, p.yawrate, p.zdistance = (
+                self._hover["vx"],
+                self._hover["vy"],
+                self._hover["yawrate"],
+                self._hover["zdistance"],
+            )
             p.active = self._active
             sample.assume_init().send()
-            self.action_port.notifier.notify_with_custom_event_id(self.action_port.event)
-            self.logger.debug(f"Action published: {p.vx}, {p.vy}, {p.yawrate}, {p.zdistance}, active={p.active}")
+            self.action_port.notifier.notify_with_custom_event_id(
+                self.action_port.event
+            )
+            self.logger.debug(
+                f"Action published: {p.vx}, {p.vy}, {p.yawrate}, {p.zdistance}, active={p.active}"
+            )
         except Exception as e:
             self.logger.warning(f"Action publish failed: {e}")
+
 
 def main():
     node = ControlNode(level=logging.DEBUG)
     node.run()
+
 
 if __name__ == "__main__":
     main()

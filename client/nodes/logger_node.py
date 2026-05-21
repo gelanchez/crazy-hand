@@ -11,9 +11,14 @@ from PIL import Image
 
 from client.common.blackboards import CONFIG
 from client.common.constants import EventId, IMAGE_HEIGHT, IMAGE_WIDTH, ServiceName
-from client.common.database import ActionSample, Database, TelemetrySample
+from client.common.database import (
+    ActionSample,
+    Database,
+    PerceptionSample,
+    TelemetrySample,
+)
 from client.common.node import Node
-from client.common.payloads import ActionData, ImageData, TelemetryData
+from client.common.payloads import ActionData, ImageData, PerceptionData, TelemetryData
 
 NODE_NAME = "logger_node"
 IMAGES_PATH = Path("./data/images")
@@ -25,18 +30,24 @@ class LoggerNode(Node):
         self.database = Database()
         # Background thread for non-blocking image saves
         self._save_queue: queue.Queue = queue.Queue(maxsize=10)
-        self._save_thread = threading.Thread(target=self._image_save_worker, daemon=True)
+        self._save_thread = threading.Thread(
+            target=self._image_save_worker, daemon=True
+        )
         self._save_thread.start()
 
     def _image_save_worker(self):
         """Consume (pixels_bytes, path) tuples and write them to disk."""
         while True:
-            item = self._save_queue.get() # TODO Should we add a timeout and catch the exception?
+            item = (
+                self._save_queue.get()
+            )  # TODO Should we add a timeout and catch the exception?
             if item is None:  # sentinel — shut down
                 break
             pixels_bytes, path = item
             try:
-                image = Image.frombuffer("L", (IMAGE_WIDTH, IMAGE_HEIGHT), pixels_bytes, "raw", "L", 0, 1)
+                image = Image.frombuffer(
+                    "L", (IMAGE_WIDTH, IMAGE_HEIGHT), pixels_bytes, "raw", "L", 0, 1
+                )
                 image.save(path)
             except Exception as e:
                 self.logger.warning(f"Image save failed: {e}")
@@ -45,11 +56,25 @@ class LoggerNode(Node):
 
     def run(self):
         # 1. Setup Ports
-        self.image_port = self.create_subscriber(ServiceName.IMAGE, ImageData, EventId.IMAGE_READY)
-        self.telemetry_port = self.create_subscriber(ServiceName.TELEMETRY, TelemetryData, EventId.TELEMETRY_READY)
-        self.action_port = self.create_subscriber(ServiceName.ACTION, ActionData, EventId.ACTION_READY)
-        
-        if self.image_port.subscriber is None or self.telemetry_port.subscriber is None or self.action_port.subscriber is None:
+        self.image_port = self.create_subscriber(
+            ServiceName.IMAGE, ImageData, EventId.IMAGE_READY
+        )
+        self.telemetry_port = self.create_subscriber(
+            ServiceName.TELEMETRY, TelemetryData, EventId.TELEMETRY_READY
+        )
+        self.action_port = self.create_subscriber(
+            ServiceName.ACTION, ActionData, EventId.ACTION_READY
+        )
+        self.perception_port = self.create_subscriber(
+            ServiceName.PERCEPTION, PerceptionData, EventId.PERCEPTION_READY
+        )
+
+        if (
+            self.image_port.subscriber is None
+            or self.telemetry_port.subscriber is None
+            or self.action_port.subscriber is None
+            or self.perception_port.subscriber is None
+        ):
             return
 
         self.blackboard_reader = self.create_blackboard_reader("/config", CONFIG)
@@ -61,11 +86,12 @@ class LoggerNode(Node):
         # 2. Setup WaitSet
         # We use WaitSet to multiplex between multiple listeners in a single thread.
         waitset = iceoryx2.WaitSetBuilder.new().create(iceoryx2.ServiceType.Ipc)
-        
+
         # Attach listeners. The guards must stay in scope to remain attached.
         image_guard = waitset.attach_notification(self.image_port.listener)
         telemetry_guard = waitset.attach_notification(self.telemetry_port.listener)
         action_guard = waitset.attach_notification(self.action_port.listener)
+        perception_guard = waitset.attach_notification(self.perception_port.listener)
 
         self.logger.info("WaitSet initialized, listening for events...")
 
@@ -77,8 +103,10 @@ class LoggerNode(Node):
                 )
 
                 # Check if we were interrupted by a signal
-                if result in (iceoryx2.WaitSetRunResult.Interrupt, 
-                              iceoryx2.WaitSetRunResult.TerminationRequest):
+                if result in (
+                    iceoryx2.WaitSetRunResult.Interrupt,
+                    iceoryx2.WaitSetRunResult.TerminationRequest,
+                ):
                     self.running = False
                     break
 
@@ -86,17 +114,23 @@ class LoggerNode(Node):
                     if event_id.has_event_from(image_guard):
                         sample = self.image_port.subscriber.receive()
                         if sample is not None:
-                            save_images = self.blackboard_read(self.blackboard_reader, "save_images")
+                            save_images = self.blackboard_read(
+                                self.blackboard_reader, "save_images"
+                            )
                             if save_images:
                                 data = sample.payload()
                                 # Copy pixels out of shared memory before releasing the sample
                                 pixels_bytes = bytes(data.contents.pixels)
                                 image_name = f"{data.contents.timestamp}.png"
                                 try:
-                                    self._save_queue.put_nowait((pixels_bytes, IMAGES_PATH / image_name))
+                                    self._save_queue.put_nowait(
+                                        (pixels_bytes, IMAGES_PATH / image_name)
+                                    )
                                     self.logger.debug(f"Enqueued save: {image_name}")
                                 except queue.Full:
-                                    self.logger.warning("Image save queue full — dropping frame")
+                                    self.logger.warning(
+                                        "Image save queue full — dropping frame"
+                                    )
                             del sample
 
                     # Handle Telemetry Event
@@ -106,11 +140,16 @@ class LoggerNode(Node):
                             data = sample.payload()
                             self.logger.debug(f"Received Telemetry: {data.contents}")
                             from client.common.constants import AppStatus
+
                             try:
                                 status_enum = AppStatus(data.contents.status)
                             except ValueError:
                                 status_enum = AppStatus.DISCONNECTED
-                            telemetry_sample = TelemetrySample(ts=datetime.now(timezone.utc), fps=data.contents.fps, status=status_enum)
+                            telemetry_sample = TelemetrySample(
+                                ts=datetime.now(timezone.utc),
+                                fps=data.contents.fps,
+                                status=status_enum,
+                            )
                             del data, sample
                             self.database.log(telemetry_sample)
 
@@ -127,12 +166,44 @@ class LoggerNode(Node):
                                 vx=c.vx,
                                 vy=c.vy,
                                 yawrate=c.yawrate,
-                                zdistance=c.zdistance
+                                zdistance=c.zdistance,
                             )
                             del c, data, sample
                             self.database.log(action_sample)
 
-        except (iceoryx2.NodeWaitFailure, iceoryx2.ListenerWaitError, KeyboardInterrupt):
+                    elif event_id.has_event_from(perception_guard):
+                        sample = self.perception_port.subscriber.receive()
+                        if sample is not None:
+                            data = sample.payload()
+                            self.logger.debug(f"Received Perception: {data.contents}")
+
+                            raw_gesture = data.contents.gesture_name
+                            if isinstance(raw_gesture, bytes):
+                                gesture_name = raw_gesture.decode(
+                                    "utf-8", errors="ignore"
+                                ).rstrip("\x00")
+                            else:
+                                gesture_name = str(raw_gesture)
+
+                            perception_sample = PerceptionSample(
+                                ts=datetime.now(timezone.utc),
+                                hand_detected=data.contents.hand_detected,
+                                hand_x=data.contents.hand_x,
+                                hand_y=data.contents.hand_y,
+                                gesture_name=gesture_name,
+                                gesture_confidence=data.contents.gesture_confidence,
+                            )
+
+                            # TODO save processed pixels
+
+                            del data, sample
+                            self.database.log(perception_sample)
+
+        except (
+            iceoryx2.NodeWaitFailure,
+            iceoryx2.ListenerWaitError,
+            KeyboardInterrupt,
+        ):
             pass
         except Exception as e:
             self.logger.error(f"LoggerNode error: {e}", exc_info=True)

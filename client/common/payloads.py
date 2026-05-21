@@ -5,12 +5,12 @@ from client.common.constants import AppStatus, IMAGE_SIZE
 
 class ActionData(ctypes.Structure):
     _fields_ = [
-        ("active",    ctypes.c_bool),
-        ("vx",        ctypes.c_float),
-        ("vy",        ctypes.c_float),
-        ("yawrate",   ctypes.c_float),
+        ("active", ctypes.c_bool),
+        ("vx", ctypes.c_float),
+        ("vy", ctypes.c_float),
+        ("yawrate", ctypes.c_float),
         ("zdistance", ctypes.c_float),
-        ("_pad",      ctypes.c_uint8 * 3), # TODO needed?
+        ("_pad", ctypes.c_uint8 * 3),  # TODO needed?
     ]
 
     def __str__(self) -> str:

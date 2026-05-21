@@ -6,6 +6,7 @@ import time
 
 import click
 
+from client.common.database import Database
 from client.common.utils import setup_logging
 
 logger = setup_logging("main")
@@ -20,6 +21,9 @@ def main(sim):
     venv_python = os.path.join(os.getcwd(), ".venv", "bin", "python")
     if not os.path.exists(venv_python):
         venv_python = sys.executable
+
+    Database.start_questdb()
+    # Database.drop_old_partitions()
 
     processes = []
     nodes = [
@@ -74,7 +78,9 @@ def main(sim):
             try:
                 process.wait(timeout=2)
             except subprocess.TimeoutExpired:
-                logger.warning(f"Node {process.args} did not terminate in time, killing...")
+                logger.warning(
+                    f"Node {process.args} did not terminate in time, killing..."
+                )
                 try:
                     os.killpg(os.getpgid(process.pid), signal.SIGKILL)
                 except Exception:
@@ -88,4 +94,3 @@ if __name__ == "__main__":
         main()
     except BrokenPipeError:
         pass
-

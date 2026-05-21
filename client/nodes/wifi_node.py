@@ -355,10 +355,17 @@ class WifiNode(Node):
 
     def run(self):
         try:
+            # INITIALIZE ICEORYX2
+            self.image_port = self.create_publisher(ServiceName.IMAGE, ImageData, EventId.IMAGE_READY)
+            self.telemetry_port = self.create_publisher(ServiceName.TELEMETRY, TelemetryData, EventId.TELEMETRY_READY)
+
+            self.action_port = self.create_subscriber(ServiceName.ACTION, ActionData, EventId.ACTION_READY)
+
+            if self.action_port is None or self.action_port.subscriber is None:
+                self.logger.error("Failed to create action subscriber")
+                return
+
             if self.sim:
-                # In sim mode, we can init iceoryx2 immediately
-                self.image_port = self.create_publisher(ServiceName.IMAGE, ImageData, EventId.IMAGE_READY)
-                self.telemetry_port = self.create_publisher(ServiceName.TELEMETRY, TelemetryData, EventId.TELEMETRY_READY)
                 _y = np.arange(IMAGE_HEIGHT, dtype=np.uint16).reshape(-1, 1)
                 _x = np.arange(IMAGE_WIDTH, dtype=np.uint16).reshape(1, -1)
                 threading.Thread(target=self._telemetry_loop, daemon=True).start()
@@ -383,7 +390,7 @@ class WifiNode(Node):
 
                 if not self.running: return
 
-                # 1. CONNECT TO CRAZYFLIE FIRST (No iceoryx2 yet)
+                # CONNECT TO CRAZYFLIE
                 cflib.crtp.init_drivers()
                 self.cf = Crazyflie(rw_cache="./data/cache")
                 
@@ -412,21 +419,39 @@ class WifiNode(Node):
 
                 if not self.running: return
 
-                # 2. NOW INITIALIZE ICEORYX2 # TODO why after?
-                self.image_port = self.create_publisher(ServiceName.IMAGE, ImageData, EventId.IMAGE_READY)
-                self.telemetry_port = self.create_publisher(ServiceName.TELEMETRY, TelemetryData, EventId.TELEMETRY_READY)
+                # Check if AI-deck and Flow2 decks are attached
+                decks_status = {"bcFlow2": False, "bcAI": False}
+                decks_event = threading.Event()
 
-                self.action_port = self.create_subscriber(ServiceName.ACTION, ActionData, EventId.ACTION_READY)
+                def _deck_cb_flow(name, value_str):
+                    if int(value_str):
+                        decks_status["bcFlow2"] = True
+                    if decks_status["bcFlow2"] and decks_status["bcAI"]:
+                        decks_event.set()
 
-                if self.action_port is None or self.action_port.subscriber is None:
-                    self.logger.error("Failed to create action subscriber")
+                def _deck_cb_ai(name, value_str):
+                    if int(value_str):
+                        decks_status["bcAI"] = True
+                    if decks_status["bcFlow2"] and decks_status["bcAI"]:
+                        decks_event.set()
+
+                self.cf.param.add_update_callback(group="deck", name="bcFlow2", cb=_deck_cb_flow)
+                self.cf.param.add_update_callback(group="deck", name="bcAI", cb=_deck_cb_ai)
+
+                self.cf.param.request_param_update("deck.bcFlow2")
+                self.cf.param.request_param_update("deck.bcAI")
+
+                if not decks_event.wait(timeout=5.0):
+                    self.logger.error("Required decks (AI-deck, Flow2) not detected!")
+                    self.running = False
                     return
+                self.logger.info("AI-deck and Flow2 decks detected.")
 
                 # Pre-register CPX APP queue to avoid silent frame drops at startup
                 self._prewarm_cpx_queue()
                 self._connect_time = time.time()
 
-                # 3. START BACKGROUND THREADS
+                # START BACKGROUND THREADS
                 threading.Thread(target=self._action_loop, daemon=True).start()
                 threading.Thread(target=self._receive_images, daemon=True).start()
                 threading.Thread(target=self._telemetry_loop, daemon=True).start()

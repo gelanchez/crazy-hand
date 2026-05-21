@@ -1,19 +1,26 @@
+import socket
+import subprocess
+import time
+
 from dataclasses import dataclass, fields
 from datetime import datetime
-from typing import Union
-
 from enum import Enum
+from pathlib import Path
+from typing import Union
 
 from questdb.ingress import IngressError, Sender
 
 from client.common.constants import AppStatus
 from client.common.utils import setup_logging
 
+QUESTDB_SCRIPT = Path("/home/jose/apps/questdb-9.3.5-rt-linux-x86-64/bin/questdb.sh")
+
 logger = setup_logging("database")
 
 
 @dataclass
 class TelemetrySample:
+    TABLE = "telemetry_cf"
     ts: datetime
     fps: float
     status: AppStatus
@@ -21,6 +28,7 @@ class TelemetrySample:
 
 @dataclass
 class ActionSample:
+    TABLE = "action_cf"
     ts: datetime
     active: bool
     vx: float
@@ -31,6 +39,7 @@ class ActionSample:
 
 @dataclass
 class PerceptionSample:
+    TABLE = "perception_cf"
     ts: datetime
     hand_detected: bool
     hand_x: int
@@ -70,7 +79,9 @@ class Database:
         except IngressError as e:
             self._connected = False
             self.sender = None
-            logger.warning(f"Could not connect to QuestDB: {e}. Will retry dynamically on next log/flush.")
+            logger.warning(
+                f"Could not connect to QuestDB: {e}. Will retry dynamically on next log/flush."
+            )
             return False
         except Exception as e:
             self._connected = False
@@ -108,16 +119,16 @@ class Database:
             if columns:
                 kwargs["columns"] = columns
 
-            self.sender.row(
-                self.table_name,
-                **kwargs
-            )
+            table = getattr(sample, "TABLE", self.table_name)
+            self.sender.row(table, **kwargs)
             self._buffered_count += 1
 
             if self._buffered_count >= self.max_buffer:
                 self.flush()
         except IngressError as e:
-            logger.error(f"QuestDB ingress error during logging: {e}. Resetting connection.")
+            logger.error(
+                f"QuestDB ingress error during logging: {e}. Resetting connection."
+            )
             self._connected = False
             self.sender = None
         except Exception as e:
@@ -137,7 +148,9 @@ class Database:
             self.sender.flush()
             self._buffered_count = 0
         except IngressError as e:
-            logger.error(f"QuestDB ingress error during flush: {e}. Resetting connection.")
+            logger.error(
+                f"QuestDB ingress error during flush: {e}. Resetting connection."
+            )
             self._connected = False
             self.sender = None
         except Exception as e:
@@ -167,3 +180,45 @@ class Database:
 
     def __exit__(self, exc_type, exc, tb):
         self.close()
+
+    @staticmethod
+    def is_questdb_running(host="127.0.0.1", port=9000):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(1.0)
+            return sock.connect_ex((host, port)) == 0
+
+    @staticmethod
+    def start_questdb():
+        if Database.is_questdb_running():
+            logger.info("QuestDB already running")
+            return
+
+        logger.info("Starting QuestDB...")
+
+        result = subprocess.run(
+            [str(QUESTDB_SCRIPT), "start"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        if result.stderr:
+            logger.warning(result.stderr.strip())
+
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"Failed to start QuestDB (exit code {result.returncode})"
+            )
+
+        # Give QuestDB a moment to initialize
+        timeout_s = 5.0
+        start = time.time()
+
+        while time.time() - start < timeout_s:
+            if Database.is_questdb_running():
+                logger.info("QuestDB started successfully")
+                return
+
+            time.sleep(0.5)
+
+        raise RuntimeError("QuestDB did not become ready in time")
