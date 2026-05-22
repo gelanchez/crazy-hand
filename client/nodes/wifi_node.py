@@ -44,13 +44,27 @@ _LAND_STEP = _LAND_RATE * _LOOP_INTERVAL  # m per loop iteration
 _LAND_CUTOFF = 0.05     # m — stop motors below this height
 _UNLOCK_PACKETS = 10    # unlock packets at loop rate before first hover setpoint (~500 ms)
 
-# Monkey-patch cflib's CPXRouter to suppress benign traceback logs when disconnecting
+# Monkey-patch cflib to redirect all print() calls and logger output through our logger.
+# cflib uses bare print() throughout its transport and driver code — these bypass Python
+# logging entirely and appear as noise on stdout/stderr during normal connect/disconnect cycles.
 try:
+    import socket as _socket
     import cflib.cpx
+    import cflib.cpx.transports
+    import cflib.crtp.tcpdriver
     import logging as _logging
 
-    _cpx_logger = _logging.getLogger(NODE_NAME)
+    _cflib_logger = _logging.getLogger(NODE_NAME)
 
+    # Silence cflib's own Python logger (e.g. "Couldn't load link driver") so it doesn't
+    # leak to stderr via the root logger's last-resort handler.  Our connection callbacks
+    # already capture and log all meaningful events.
+    _cflib_root = _logging.getLogger("cflib")
+    if not any(isinstance(h, _logging.NullHandler) for h in _cflib_root.handlers):
+        _cflib_root.addHandler(_logging.NullHandler())
+    _cflib_root.propagate = False
+
+    # CPXRouter.run — remove print(traceback) on transport errors during disconnect
     def _patched_cpx_router_run(self):
         while self._connected:
             try:
@@ -61,9 +75,54 @@ try:
                     self._rxQueues[packet.function.value].put(packet)
             except Exception:
                 if self._connected:
-                    _cpx_logger.error("CPXRouter transport error", exc_info=True)
+                    _cflib_logger.error("CPXRouter transport error", exc_info=True)
 
     cflib.cpx.CPXRouter.run = _patched_cpx_router_run
+
+    # CPXRouter.receivePacket — remove "Creating queue for ..." print
+    def _patched_cpx_router_receive_packet(self, function, timeout=None):
+        if function.value not in self._rxQueues:
+            _cflib_logger.debug("CPXRouter: creating queue for %s", function)
+            self._rxQueues[function.value] = queue.Queue()
+        return self._rxQueues[function.value].get(block=True, timeout=timeout)
+
+    cflib.cpx.CPXRouter.receivePacket = _patched_cpx_router_receive_packet
+
+    # SocketTransport — remove connect/disconnect/init prints
+    def _patched_socket_transport_init(self, host, port):
+        _cflib_logger.debug("CPX socket transport: %s:%s", host, port)
+        self._host = host
+        self._port = port
+        self.connect()
+
+    def _patched_socket_transport_connect(self):
+        _cflib_logger.info("Connecting CPX socket on %s:%s...", self._host, self._port)
+        self._socket = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        self._socket.connect((self._host, self._port))
+        _cflib_logger.debug("CPX socket connected")
+
+    def _patched_socket_transport_disconnect(self):
+        _cflib_logger.debug("Closing CPX socket transport")
+        self._socket.shutdown(_socket.SHUT_WR)
+        self._socket.close()
+        self._socket = None
+
+    cflib.cpx.transports.SocketTransport.__init__ = _patched_socket_transport_init
+    cflib.cpx.transports.SocketTransport.connect = _patched_socket_transport_connect
+    cflib.cpx.transports.SocketTransport.disconnect = _patched_socket_transport_disconnect
+
+    # TcpDriver.close — remove "Driver closed" print
+    def _patched_tcp_driver_close(self):
+        try:
+            self.cpx.close()
+            self.cpx = None
+        except Exception as e:
+            _cflib_logger.warning("TcpDriver close error: %s", e)
+        _cflib_logger.debug("TcpDriver closed")
+        self.cpx = None
+
+    cflib.crtp.tcpdriver.TcpDriver.close = _patched_tcp_driver_close
+
 except Exception:
     pass
 
@@ -112,7 +171,7 @@ class WifiNode(Node):
     def _receive_images(self) -> None:
         self.logger.info("Image reception thread started")
         while self.running:
-            if self._reconnecting:
+            if self._reconnecting or not self.cf.is_connected():
                 time.sleep(0.2)
                 continue
             try:
@@ -120,7 +179,7 @@ class WifiNode(Node):
             except queue.Empty:
                 continue
             except Exception as e:
-                if self.running and not self._reconnecting:
+                if self.running and self.cf.is_connected():
                     self.logger.error(f"Error receiving CPX packet: {e}")
                 time.sleep(0.2)  # avoid tight loop while link is down
                 continue
@@ -146,7 +205,7 @@ class WifiNode(Node):
                 img_stream = bytearray()
                 assembly_ok = True
 
-                while len(img_stream) < size and self.running:
+                while len(img_stream) < size and self.running and self.cf.is_connected():
                     try:
                         packet = self.cf.link.cpx.receivePacket(
                             CPXFunction.APP, timeout=0.5
@@ -155,7 +214,7 @@ class WifiNode(Node):
                     except queue.Empty:
                         continue
                     except Exception as e:
-                        if self.running:
+                        if self.running and self.cf.is_connected():
                             self.logger.warning(
                                 f"Error during image assembly, dropping frame: {e}"
                             )
@@ -249,7 +308,7 @@ class WifiNode(Node):
                             "Watchdog reconnect successful — waiting for images..."
                         )
                     else:
-                        self.logger.error("Watchdog reconnect failed, will retry")
+                        self.logger.warning("Watchdog reconnect failed, will retry")
                 except Exception as e:
                     self.logger.error(f"Watchdog reconnect error: {e}")
                 finally:
@@ -430,7 +489,9 @@ class WifiNode(Node):
         self._cf_connected.set()
 
     def _on_connection_failed(self, uri: str, msg: str) -> None:
-        self.logger.error(f"Crazyflie connection failed ({uri}): {msg}")
+        # msg from cflib includes a full embedded traceback — log only the summary line
+        summary = msg.splitlines()[0] if msg else "unknown error"
+        self.logger.warning(f"Crazyflie connection failed ({uri}): {summary}")
         self._cf_connected.set()
 
     def _on_disconnected(self, uri: str) -> None:

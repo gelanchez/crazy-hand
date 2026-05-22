@@ -220,7 +220,7 @@ class MainWindow(QMainWindow):
             ServiceName.COMMAND, CommandData, EventId.COMMAND_READY
         )
 
-        self.image_receiver.status_changed.connect(self.statusBar().showMessage)
+        self.image_receiver.status_changed.connect(self._on_status_changed)
         self.image_receiver.image_received.connect(self.update_image)
         self.image_receiver.start()
 
@@ -300,6 +300,13 @@ class MainWindow(QMainWindow):
         tele_layout.addWidget(title)
         tele_layout.addStretch()
         main_layout.addWidget(tele_panel)
+
+    @Slot(str)
+    def _on_status_changed(self, text: str):
+        self.statusBar().showMessage(text)
+        if text.startswith(APP_STATUS_TEXT[AppStatus.DISCONNECTED]):
+            self.video_label.clear()
+            self.video_label.setText("Waiting for video stream...")
 
     @Slot(object)
     def update_image(self, pixels: np.ndarray):

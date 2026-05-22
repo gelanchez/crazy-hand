@@ -116,4 +116,6 @@ class FPSCounter:
 
     @property
     def fps(self):
+        if self.last_time is None or time.perf_counter() - self.last_time > self.timeout:
+            return 0.0
         return self._fps
