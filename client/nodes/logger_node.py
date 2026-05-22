@@ -2,12 +2,12 @@ import logging
 import queue
 import threading
 
+import cv2
 import iceoryx2
+import numpy as np
 
 from datetime import datetime, timezone
 from pathlib import Path
-
-from PIL import Image
 
 from client.common.blackboards import CONFIG
 from client.common.constants import EventId, FlightCommand, IMAGE_HEIGHT, IMAGE_WIDTH, ServiceName
@@ -45,10 +45,8 @@ class LoggerNode(Node):
                 break
             pixels_bytes, path = item
             try:
-                image = Image.frombuffer(
-                    "L", (IMAGE_WIDTH, IMAGE_HEIGHT), pixels_bytes, "raw", "L", 0, 1
-                )
-                image.save(path)
+                arr = np.frombuffer(pixels_bytes, dtype=np.uint8).reshape(IMAGE_HEIGHT, IMAGE_WIDTH)
+                cv2.imwrite(str(path), arr)
             except Exception as e:
                 self.logger.warning(f"Image save failed: {e}")
             finally:

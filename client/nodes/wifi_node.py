@@ -1,5 +1,4 @@
 import ctypes
-import io
 import logging
 import platform
 import queue
@@ -10,12 +9,12 @@ import time
 
 import cflib.crtp
 import click
+import cv2
 import iceoryx2
 import numpy as np
 
 from cflib.crazyflie import Crazyflie
 from cflib.cpx import CPXFunction
-from PIL import Image
 
 from client.common.constants import (
     CRAZYFLIE_IP,
@@ -175,7 +174,10 @@ class WifiNode(Node):
     def _publish_frame(self, frame_data: bytes, fmt: int) -> None:
         if fmt == 1:  # JPEG
             try:
-                img = Image.open(io.BytesIO(frame_data)).convert("L")
+                arr = np.frombuffer(frame_data, dtype=np.uint8)
+                img = cv2.imdecode(arr, cv2.IMREAD_GRAYSCALE)
+                if img is None:
+                    raise ValueError("cv2.imdecode returned None")
                 frame_data = img.tobytes()
             except Exception as e:
                 self.logger.error(f"JPEG decode error: {e}")

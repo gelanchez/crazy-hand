@@ -67,9 +67,9 @@ _SHORTCUTS = {
 }
 
 APP_STATUS_TEXT = {
-    AppStatus.CONNECTED: "Connected — receiving frames",
+    AppStatus.CONNECTED: "Connected",
     AppStatus.DISCONNECTED: "Disconnected",
-    AppStatus.SIMULATING: "Connected (Simulating)",
+    AppStatus.SIMULATING: "Simulating",
 }
 
 
@@ -132,10 +132,12 @@ class ImageReceiverThreadNode(Node, QThread):
                         if sample is not None:
                             data = sample.payload()
                             status_val = AppStatus(data.contents.status)
-                            self.status_changed.emit(
-                                APP_STATUS_TEXT.get(status_val, "Unknown State")
-                            )
+                            fps = data.contents.fps
                             del data, sample
+                            status_text = APP_STATUS_TEXT.get(status_val, "Unknown State")
+                            if fps > 0:
+                                status_text = f"{status_text} — {fps:.1f} fps"
+                            self.status_changed.emit(status_text)
 
         except (
             iceoryx2.NodeWaitFailure,

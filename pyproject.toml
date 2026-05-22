@@ -17,7 +17,6 @@ dependencies = [
     "iceoryx2",
     "numpy",
     "PySide6",
-    "pillow",
     "cflib",
     "opencv-python",
     "cfclient",
