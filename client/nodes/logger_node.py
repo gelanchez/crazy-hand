@@ -10,7 +10,7 @@ from pathlib import Path
 from PIL import Image
 
 from client.common.blackboards import CONFIG
-from client.common.constants import EventId, IMAGE_HEIGHT, IMAGE_WIDTH, ServiceName
+from client.common.constants import EventId, FlightCommand, IMAGE_HEIGHT, IMAGE_WIDTH, ServiceName
 from client.common.database import (
     ActionSample,
     Database,
@@ -163,6 +163,7 @@ class LoggerNode(Node):
                             action_sample = ActionSample(
                                 ts=datetime.now(timezone.utc),
                                 active=c.active,
+                                command=FlightCommand(c.command),
                                 vx=c.vx,
                                 vy=c.vy,
                                 yawrate=c.yawrate,

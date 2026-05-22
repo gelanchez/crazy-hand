@@ -13,7 +13,7 @@ from typing import Union
 
 from questdb.ingress import IngressError, Sender
 
-from client.common.constants import AppStatus
+from client.common.constants import AppStatus, FlightCommand
 from client.common.utils import setup_logging
 
 QUESTDB_SCRIPT = Path("/home/jose/apps/questdb-9.3.5-rt-linux-x86-64/bin/questdb.sh")
@@ -39,6 +39,7 @@ class ActionSample:
     TABLE = "action_cf"
     ts: datetime
     active: bool
+    command: FlightCommand
     vx: float
     vy: float
     yawrate: float

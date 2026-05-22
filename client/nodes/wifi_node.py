@@ -21,7 +21,9 @@ from client.common.constants import (
     CRAZYFLIE_IP,
     CRAZYFLIE_URI,
     AppStatus,
+    DEFAULT_HEIGHT,
     EventId,
+    FlightCommand,
     IMAGE_HEIGHT,
     IMAGE_SIZE,
     IMAGE_WIDTH,
@@ -60,6 +62,13 @@ NODE_NAME = "wifi_node"
 
 # How often to emit frame-level DEBUG messages to console (every N frames)
 _FRAME_LOG_INTERVAL = 10
+
+# Action loop timing and gentle landing parameters
+_LOOP_INTERVAL = 0.05   # seconds (~20 Hz) — CF watchdog needs setpoints at least every 500 ms
+_LAND_RATE = 0.1        # m/s descent rate during landing
+_LAND_STEP = _LAND_RATE * _LOOP_INTERVAL  # m per loop iteration
+_LAND_CUTOFF = 0.05     # m — stop motors below this height
+_UNLOCK_PACKETS = 10    # unlock packets at loop rate before first hover setpoint (~500 ms)
 
 
 def _fill_sim_frame(
@@ -286,17 +295,18 @@ class WifiNode(Node):
 
     def _action_loop(self) -> None:
         self.logger.info("Action loop started")
-        armed = False
-        hover = (0.0, 0.0, 0.0, 0.3)  # vx, vy, yawrate, zdist
-        sample = None
+        flying = False
+        landing = False
+        unlocking = 0  # countdown: sends thrust=0 packets before first hover setpoint
+        hover = [0.0, 0.0, 0.0, DEFAULT_HEIGHT]  # vx, vy, yawrate, zdist
+
         while self.running:
-            sample = None
             try:
                 event_id = self.action_port.listener.try_wait_one()
             except Exception as e:
                 if self.running:
                     self.logger.error(f"Action listener error: {e}")
-                    time.sleep(0.1)
+                time.sleep(0.1)
                 continue
 
             if event_id is not None and event_id == self.action_port.event:
@@ -304,38 +314,87 @@ class WifiNode(Node):
                     sample = self.action_port.subscriber.receive()
                 except Exception as e:
                     self.logger.warning(f"Action receive error: {e}")
+                    sample = None
 
                 if sample is not None:
                     act = sample.payload().contents
-                    active = bool(act.active)
-                    hover = (act.vx, act.vy, act.yawrate, act.zdistance)
+                    command = FlightCommand(act.command)
+                    hover[0] = act.vx
+                    hover[1] = act.vy
+                    hover[2] = act.yawrate
+                    if not landing:
+                        hover[3] = act.zdistance
                     del act, sample
-                    sample = None
 
-                    # Toggle armed state on active=True (Space press)
-                    if active and not armed:
-                        armed = True
-                        self.logger.info(f"ARMED — hovering at z={hover[3]:.2f}")
-                    elif active and armed:
-                        armed = False
-                        self.logger.info("DISARMED")
+                    match command:
+                        case FlightCommand.TAKEOFF:
+                            if not flying:
+                                self.logger.info(f"Taking off to z={hover[3]:.2f}m")
+                                flying = True
+                                landing = False
+                                unlocking = _UNLOCK_PACKETS
+                            elif landing:
+                                self.logger.info("Re-takeoff: cancelling landing")
+                                landing = False
+                                unlocking = _UNLOCK_PACKETS
+
+                        case FlightCommand.LAND:
+                            if flying and not landing and unlocking == 0:
+                                self.logger.info(f"Landing from z={hover[3]:.2f}m")
+                                landing = True
+                                hover[0] = hover[1] = hover[2] = 0.0
+
+                        case FlightCommand.EMERGENCY_STOP:
+                            self.logger.warning("EMERGENCY STOP — cutting motors")
+                            try:
+                                self.cf.commander.send_stop_setpoint()
+                            except Exception as e:
+                                self.logger.error(f"Emergency stop error: {e}")
+                            flying = False
+                            landing = False
+                            unlocking = 0
+                            hover[0] = hover[1] = hover[2] = 0.0
+
+            if flying:
+                if unlocking > 0:
+                    try:
+                        self.cf.commander.send_setpoint(0, 0, 0, 0)
+                        unlocking -= 1
+                    except Exception as e:
+                        self.logger.warning(f"Unlock error: {e}")
+                elif landing:
+                    hover[3] = max(_LAND_CUTOFF, hover[3] - _LAND_STEP)
+                    if hover[3] <= _LAND_CUTOFF:
                         try:
                             self.cf.commander.send_stop_setpoint()
                         except Exception as e:
-                            self.logger.warning(f"Failed to send stop: {e}")
-
-            # While armed, continuously re-send hover setpoints
-            if armed:
+                            self.logger.warning(f"Land stop error: {e}")
+                        flying = False
+                        landing = False
+                        unlocking = 0
+                        hover[3] = DEFAULT_HEIGHT
+                        self.logger.info("Landed")
+                    else:
+                        try:
+                            self.cf.commander.send_hover_setpoint(*hover)
+                        except Exception as e:
+                            self.logger.warning(f"Landing hover error: {e}")
+                else:
+                    try:
+                        self.cf.commander.send_hover_setpoint(*hover)
+                    except Exception as e:
+                        self.logger.warning(f"Hover send error: {e}")
+            else:
+                # Keep commander alive while grounded — prevents EKF drift between flights
                 try:
-                    self.cf.commander.send_hover_setpoint(*hover)
+                    self.cf.commander.send_setpoint(0, 0, 0, 0)
                 except Exception as e:
-                    self.logger.warning(f"Hover send error (still armed): {e}")
+                    self.logger.warning(f"Keep-alive error: {e}")
 
-            # ~20Hz loop: balance between CF watchdog needs and CPX bandwidth
-            time.sleep(0.05)
+            time.sleep(_LOOP_INTERVAL)
 
         # Ensure motors stop on exit
-        if armed:
+        if flying:
             try:
                 self.cf.commander.send_stop_setpoint()
             except Exception:
