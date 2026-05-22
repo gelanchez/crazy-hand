@@ -85,6 +85,8 @@ class WifiNode(Node):
         self._connect_time: float = 0.0  # set after successful connect
         self._reconnecting = False  # True while watchdog is reconnecting
 
+    # --- Image pipeline ---
+
     def _prewarm_cpx_queue(self) -> None:
         """Pre-register the CPX APP queue before _receive_images starts.
 
@@ -246,6 +248,8 @@ class WifiNode(Node):
                     self._last_frame_time = time.time()
                     self._reconnecting = False
 
+    # --- Telemetry ---
+
     def _telemetry_loop(self) -> None:
         # Note: telemetry_port is created in run() before this thread starts
         while self.running:
@@ -277,6 +281,8 @@ class WifiNode(Node):
                 if self.running:
                     self.logger.warning(f"Telemetry publish error: {e}")
             time.sleep(1)  # TODO
+
+    # --- Flight control ---
 
     def _action_loop(self) -> None:
         self.logger.info("Action loop started")
@@ -336,6 +342,8 @@ class WifiNode(Node):
                 pass
         self.logger.info("Action loop exited")
 
+    # --- Crazyflie callbacks ---
+
     def _on_console(self, text):
         self._console_buffer += text
         if "\n" in self._console_buffer:
@@ -369,6 +377,8 @@ class WifiNode(Node):
     def _on_disconnected(self, uri: str) -> None:
         self.logger.warning(f"Crazyflie disconnected: {uri}")
 
+    # --- Connection ---
+
     @staticmethod
     def check_connection(host=CRAZYFLIE_IP):
         param = "-n" if platform.system().lower() == "windows" else "-c"
@@ -379,6 +389,102 @@ class WifiNode(Node):
             )
             == 0
         )
+
+    def _run_sim(self) -> None:
+        _y = np.arange(IMAGE_HEIGHT, dtype=np.uint16).reshape(-1, 1)
+        _x = np.arange(IMAGE_WIDTH, dtype=np.uint16).reshape(1, -1)
+        threading.Thread(target=self._telemetry_loop, daemon=True).start()
+        while self.running:
+            self.node.wait(iceoryx2.Duration.from_millis(100))
+            if not self.running:
+                break
+            sample = self.image_port.publisher.loan_uninit()
+            payload = sample.payload().contents
+            payload.id = self._frame_id
+            payload.timestamp = int(time.time() * 1000)
+            image = np.ctypeslib.as_array(payload.pixels).reshape(
+                IMAGE_HEIGHT, IMAGE_WIDTH
+            )
+            _fill_sim_frame(image, self._frame_id, _y, _x)
+            self._frame_id += 1
+            sample.assume_init().send()
+            self.fps_counter.update()
+            self.logger.debug(f"FPS: {self.fps_counter.fps:.1f}")
+            self.image_port.notifier.notify_with_custom_event_id(self.image_port.event)
+
+    def _check_required_decks(self) -> bool:
+        """Verify AI-deck and Flow2 are attached by polling params.
+
+        Returns True if both detected within timeout, False otherwise.
+        """
+        decks_status = {"bcFlow2": False, "bcAI": False}
+        decks_event = threading.Event()
+
+        def _deck_cb_flow(name, value_str):
+            if int(value_str):
+                decks_status["bcFlow2"] = True
+            if decks_status["bcFlow2"] and decks_status["bcAI"]:
+                decks_event.set()
+
+        def _deck_cb_ai(name, value_str):
+            if int(value_str):
+                decks_status["bcAI"] = True
+            if decks_status["bcFlow2"] and decks_status["bcAI"]:
+                decks_event.set()
+
+        self.cf.param.add_update_callback(
+            group="deck", name="bcFlow2", cb=_deck_cb_flow
+        )
+        self.cf.param.add_update_callback(group="deck", name="bcAI", cb=_deck_cb_ai)
+        self.cf.param.request_param_update("deck.bcFlow2")
+        self.cf.param.request_param_update("deck.bcAI")
+
+        if not decks_event.wait(timeout=5.0):
+            self.logger.error("Required decks (AI-deck, Flow2) not detected!")
+            return False
+
+        self.logger.info("AI-deck and Flow2 decks detected.")
+        return True
+
+    def _connect_cf(self) -> bool:
+        """Initialize cflib and connect to Crazyflie, retrying until connected or stopped.
+
+        Returns True if connected, False if self.running became False.
+        """
+        cflib.crtp.init_drivers()
+        self.cf = Crazyflie(rw_cache="./data/cache")
+
+        # Disable parameter flood to save bandwidth for images
+        self.cf.param.request_update_of_all_params = lambda: self.logger.info(
+            "Parameter flood disabled"
+        )
+
+        self.cf.connected.add_callback(self._on_connected)
+        self.cf.connection_failed.add_callback(self._on_connection_failed)
+        self.cf.disconnected.add_callback(self._on_disconnected)
+        self.cf.console.receivedChar.add_callback(self._on_console)
+
+        self.logger.info(f"Opening link to {CRAZYFLIE_URI}...")
+        self.cf.open_link(CRAZYFLIE_URI)
+
+        while self.running and not self.cf.is_connected():
+            self._cf_connected.clear()
+            if self._cf_connected.wait(timeout=10.0):
+                if self.cf.is_connected():
+                    break
+            if not self.cf.is_connected():
+                self.logger.warning("Connection timed out, retrying...")
+                try:
+                    self.cf.close_link()
+                except Exception:
+                    pass
+                time.sleep(1.0)
+                self.logger.info(f"Opening link to {CRAZYFLIE_URI}...")
+                self.cf.open_link(CRAZYFLIE_URI)
+
+        return self.running
+
+    # --- Entry point ---
 
     def run(self):
         try:
@@ -399,30 +505,7 @@ class WifiNode(Node):
                 return
 
             if self.sim:
-                _y = np.arange(IMAGE_HEIGHT, dtype=np.uint16).reshape(-1, 1)
-                _x = np.arange(IMAGE_WIDTH, dtype=np.uint16).reshape(1, -1)
-                threading.Thread(target=self._telemetry_loop, daemon=True).start()
-                while self.running:
-                    self.node.wait(
-                        iceoryx2.Duration.from_millis(100)
-                    )  # TODO magic number
-                    if not self.running:
-                        break
-                    sample = self.image_port.publisher.loan_uninit()
-                    payload = sample.payload().contents
-                    payload.id = self._frame_id
-                    payload.timestamp = int(time.time() * 1000)
-                    image = np.ctypeslib.as_array(payload.pixels).reshape(
-                        IMAGE_HEIGHT, IMAGE_WIDTH
-                    )
-                    _fill_sim_frame(image, self._frame_id, _y, _x)
-                    self._frame_id += 1
-                    sample.assume_init().send()
-                    self.fps_counter.update()
-                    self.logger.debug(f"FPS: {self.fps_counter.fps:.1f}")
-                    self.image_port.notifier.notify_with_custom_event_id(
-                        self.image_port.event
-                    )
+                self._run_sim()
             else:
                 self.logger.info(
                     f"Waiting for network connectivity to {CRAZYFLIE_IP}..."
@@ -434,70 +517,13 @@ class WifiNode(Node):
                     return
 
                 # CONNECT TO CRAZYFLIE
-                cflib.crtp.init_drivers()
-                self.cf = Crazyflie(rw_cache="./data/cache")
-
-                # MONKEY-PATCH: Disable parameter flood to save bandwidth for images
-                self.cf.param.request_update_of_all_params = lambda: self.logger.info(
-                    "Parameter flood disabled"
-                )
-
-                self.cf.connected.add_callback(self._on_connected)
-                self.cf.connection_failed.add_callback(self._on_connection_failed)
-                self.cf.disconnected.add_callback(self._on_disconnected)
-                self.cf.console.receivedChar.add_callback(self._on_console)
-                self.logger.info(f"Opening link to {CRAZYFLIE_URI}...")
-                self.cf.open_link(CRAZYFLIE_URI)
-
-                while self.running and not self.cf.is_connected():
-                    self._cf_connected.clear()
-                    if self._cf_connected.wait(timeout=10.0):
-                        if self.cf.is_connected():
-                            break
-                    if not self.cf.is_connected():
-                        self.logger.warning("Connection timed out, retrying...")
-                        try:
-                            self.cf.close_link()
-                        except:
-                            pass
-                        time.sleep(1.0)
-                        self.logger.info(f"Opening link to {CRAZYFLIE_URI}...")
-                        self.cf.open_link(CRAZYFLIE_URI)
-
-                if not self.running:
+                if not self._connect_cf():
                     return
 
                 # Check if AI-deck and Flow2 decks are attached
-                decks_status = {"bcFlow2": False, "bcAI": False}
-                decks_event = threading.Event()
-
-                def _deck_cb_flow(name, value_str):
-                    if int(value_str):
-                        decks_status["bcFlow2"] = True
-                    if decks_status["bcFlow2"] and decks_status["bcAI"]:
-                        decks_event.set()
-
-                def _deck_cb_ai(name, value_str):
-                    if int(value_str):
-                        decks_status["bcAI"] = True
-                    if decks_status["bcFlow2"] and decks_status["bcAI"]:
-                        decks_event.set()
-
-                self.cf.param.add_update_callback(
-                    group="deck", name="bcFlow2", cb=_deck_cb_flow
-                )
-                self.cf.param.add_update_callback(
-                    group="deck", name="bcAI", cb=_deck_cb_ai
-                )
-
-                self.cf.param.request_param_update("deck.bcFlow2")
-                self.cf.param.request_param_update("deck.bcAI")
-
-                if not decks_event.wait(timeout=5.0):
-                    self.logger.error("Required decks (AI-deck, Flow2) not detected!")
+                if not self._check_required_decks():
                     self.running = False
                     return
-                self.logger.info("AI-deck and Flow2 decks detected.")
 
                 # Pre-register CPX APP queue to avoid silent frame drops at startup
                 self._prewarm_cpx_queue()
