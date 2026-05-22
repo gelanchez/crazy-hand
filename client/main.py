@@ -1,8 +1,12 @@
+import glob
 import os
 import signal
 import subprocess
 import sys
+import shutil
 import time
+
+from pathlib import Path
 
 import click
 
@@ -10,6 +14,30 @@ from client.common.database import Database
 from client.common.utils import setup_logging
 
 logger = setup_logging("main")
+
+
+def cleanup_iceoryx2():
+    """
+    Cleans stale Iceoryx2 shared memory and temp files.
+    Safe to run at startup when no nodes are running.
+    """
+
+    # /dev/shm (shared memory)
+    for path in glob.glob("/dev/shm/iox2_*"):
+        try:
+            os.remove(path)
+            logger.info(f"Removed shared memory: {path}")
+        except Exception as e:
+            logger.debug(f"Could not remove {path}: {e}")
+
+    # /tmp/iceoryx2 (temp files)
+    tmp_dir = Path("/tmp/iceoryx2")
+    if tmp_dir.exists():
+        try:
+            shutil.rmtree(tmp_dir)
+            logger.info("Removed /tmp/iceoryx2")
+        except Exception as e:
+            logger.debug(f"Could not remove /tmp/iceoryx2: {e}")
 
 
 @click.option("--sim", is_flag=True, help="Run in simulation mode")
@@ -23,7 +51,9 @@ def main(sim):
         venv_python = sys.executable
 
     Database.start_questdb()
-    # Database.drop_old_partitions()
+    Database.cleanup_old_data(24 * 7 * 30)  # 30 days
+
+    cleanup_iceoryx2()
 
     processes = []
     nodes = [

@@ -1,6 +1,9 @@
 import socket
 import subprocess
+import threading
 import time
+import http.client
+import urllib.parse
 
 from dataclasses import dataclass, fields
 from datetime import datetime
@@ -16,6 +19,11 @@ from client.common.utils import setup_logging
 QUESTDB_SCRIPT = Path("/home/jose/apps/questdb-9.3.5-rt-linux-x86-64/bin/questdb.sh")
 
 logger = setup_logging("database")
+
+
+# =========================================================
+# DATA MODELS
+# =========================================================
 
 
 @dataclass
@@ -48,62 +56,92 @@ class PerceptionSample:
     gesture_confidence: float
 
 
+Sample = Union[TelemetrySample, ActionSample, PerceptionSample]
+
+
+# =========================================================
+# DATABASE
+# =========================================================
+
+
 class Database:
     def __init__(
         self,
-        conf: str = "http::addr=localhost:9000;username=admin;password=quest;",
+        conf: str = "tcp::addr=127.0.0.1:9009;",
         table_name: str = "telemetry_cf",
-        max_buffer: int = 10,
         precision: int = 2,
+        flush_interval_s: float = 1.0,
     ):
         self.conf = conf
         self.table_name = table_name
-        self.max_buffer = max_buffer
         self.precision = precision
+        self.flush_interval_s = flush_interval_s
+
         self.closed = False
-        self._connected = False
-        self._buffered_count = 0
+        self._stop = False
+
         self.sender = None
 
+        self.buffers = {
+            "telemetry_cf": [],
+            "action_cf": [],
+            "perception_cf": [],
+        }
+
         self._connect()
+
+        self._thread = threading.Thread(target=self._worker, daemon=True)
+        self._thread.start()
+
+    # =====================================================
+    # CONNECTION
+    # =====================================================
 
     def _connect(self) -> bool:
         if self.closed:
             return False
+
         try:
             self.sender = Sender.from_conf(self.conf)
             self.sender.establish()
-            self._connected = True
-            logger.info("Successfully connected and established connection to QuestDB.")
+            logger.info("Connected to QuestDB")
             return True
-        except IngressError as e:
-            self._connected = False
-            self.sender = None
-            logger.warning(
-                f"Could not connect to QuestDB: {e}. Will retry dynamically on next log/flush."
-            )
-            return False
+
         except Exception as e:
-            self._connected = False
             self.sender = None
-            logger.error(f"Unexpected error connecting to QuestDB: {e}")
+            logger.warning(f"QuestDB connection failed: {e}")
             return False
 
-    def log(self, sample: Union[TelemetrySample, ActionSample, PerceptionSample]):
+    # =====================================================
+    # WORKER
+    # =====================================================
+
+    def _worker(self):
+        while not self._stop:
+            time.sleep(self.flush_interval_s)
+            try:
+                self.flush()
+            except Exception as e:
+                logger.error(f"Flush worker error: {e}")
+
+    # =====================================================
+    # LOG
+    # =====================================================
+
+    def log(self, sample: Sample):
         if self.closed:
             return
-
-        if not self._connected:
-            if not self._connect():
-                return
 
         try:
             columns = {}
             symbols = {}
+
             for f in fields(sample):
                 if f.name == "ts":
                     continue
+
                 val = getattr(sample, f.name)
+
                 if isinstance(val, Enum):
                     symbols[f.name] = val.name
                 elif isinstance(val, str):
@@ -120,66 +158,99 @@ class Database:
                 kwargs["columns"] = columns
 
             table = getattr(sample, "TABLE", self.table_name)
-            self.sender.row(table, **kwargs)
-            self._buffered_count += 1
 
-            if self._buffered_count >= self.max_buffer:
-                self.flush()
-        except IngressError as e:
-            logger.error(
-                f"QuestDB ingress error during logging: {e}. Resetting connection."
-            )
-            self._connected = False
-            self.sender = None
+            if table not in self.buffers:
+                self.buffers[table] = []
+
+            self.buffers[table].append(kwargs)
+
         except Exception as e:
-            logger.error(f"Unexpected error during QuestDB logging: {e}")
+            logger.error(f"Unexpected error during logging: {e}")
+
+    # =====================================================
+    # FLUSH
+    # =====================================================
 
     def flush(self):
         if self.closed:
             return
 
-        if not self._connected or not self.sender:
-            return
-
-        if self._buffered_count == 0:
-            return
+        if self.sender is None:
+            if not self._connect():
+                return
 
         try:
-            self.sender.flush()
-            self._buffered_count = 0
-        except IngressError as e:
-            logger.error(
-                f"QuestDB ingress error during flush: {e}. Resetting connection."
-            )
-            self._connected = False
-            self.sender = None
+            for table in list(self.buffers.keys()):
+                self._flush_table(table)
+
         except Exception as e:
-            logger.error(f"Unexpected error during QuestDB flush: {e}")
+            logger.error(f"Unexpected flush error: {e}")
+            self.sender = None
+
+    def _flush_table(self, table: str):
+        rows = self.buffers.get(table)
+
+        if not rows:
+            return
+
+        # swap buffer immediately (non-blocking logger)
+        self.buffers[table] = []
+
+        try:
+            sender = self.sender
+
+            for row in rows:
+                sender.row(table, **row)
+
+            sender.flush()
+
+            logger.debug(f"Flushed {len(rows)} rows -> {table}")
+
+        except IngressError as e:
+            logger.error(f"Flush error for {table}: {e}")
+            self.sender = None
+
+            # restore lost data (optional choice)
+            self.buffers[table].extend(rows)
+
+    # =====================================================
+    # SHUTDOWN
+    # =====================================================
 
     def close(self):
         if self.closed:
             return
 
-        self.closed = True
+        self._stop = True
 
-        if self._connected and self.sender:
-            try:
-                self.flush()
-            except Exception:
-                pass
+        try:
+            self._thread.join(timeout=2)
+        except Exception:
+            pass
+
+        try:
+            self.flush()
+        except Exception:
+            pass
+
+        if self.sender:
             try:
                 self.sender.close()
             except Exception:
                 pass
 
         self.sender = None
-        self._connected = False
+        self.closed = True
 
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc, tb):
         self.close()
+
+    # =====================================================
+    # QUESTDB STARTUP
+    # =====================================================
 
     @staticmethod
     def is_questdb_running(host="127.0.0.1", port=9000):
@@ -206,11 +277,8 @@ class Database:
             logger.warning(result.stderr.strip())
 
         if result.returncode != 0:
-            raise RuntimeError(
-                f"Failed to start QuestDB (exit code {result.returncode})"
-            )
+            raise RuntimeError("Failed to start QuestDB")
 
-        # Give QuestDB a moment to initialize
         timeout_s = 5.0
         start = time.time()
 
@@ -218,7 +286,56 @@ class Database:
             if Database.is_questdb_running():
                 logger.info("QuestDB started successfully")
                 return
-
             time.sleep(0.5)
 
         raise RuntimeError("QuestDB did not become ready in time")
+
+    @staticmethod
+    def cleanup_old_data(hours: int = 24 * 7):
+        tables = [
+            "telemetry_cf",
+            "action_cf",
+            "perception_cf",
+        ]
+
+        for table in tables:
+            try:
+                # ---- existence probe (cheap, safe) ----
+                probe_sql = f"SELECT count() FROM {table} LIMIT 1"
+                Database._exec_sql(probe_sql)
+
+            except Exception as e:
+                # table likely does not exist → skip silently or debug log
+                logger.debug(f"[{table}] does not exist, skipping cleanup")
+                continue
+
+            try:
+                # ---- actual cleanup ----
+                sql = f"""
+                    ALTER TABLE {table}
+                    DROP PARTITION WHERE timestamp < dateadd('h', -{hours}, now())
+                """
+
+                Database._exec_sql(sql)
+                logger.info(f"[{table}] cleanup executed (> {hours}h)")
+
+            except Exception as e:
+                # real cleanup failure (not existence issue)
+                logger.warning(f"[{table}] cleanup failed: {e}")
+
+    @staticmethod
+    def _exec_sql(sql: str, host="127.0.0.1", port=9000) -> str:
+        conn = http.client.HTTPConnection(host, port, timeout=3)
+
+        path = "/exec?query=" + urllib.parse.quote(sql)
+
+        conn.request("GET", path)
+        resp = conn.getresponse()
+
+        data = resp.read().decode(errors="ignore")
+        conn.close()
+
+        if resp.status != 200:
+            raise RuntimeError(f"QuestDB HTTP error {resp.status}: {data}")
+
+        return data
