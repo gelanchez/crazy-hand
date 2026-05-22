@@ -33,31 +33,6 @@ from client.common.node import Node
 from client.common.payloads import ActionData, ImageData, TelemetryData
 from client.common.utils import FPSCounter
 
-# Monkey-patch cflib's CPXRouter to suppress benign traceback logs when disconnecting
-try:
-    import cflib.cpx
-
-    def _patched_cpx_router_run(self):
-        while self._connected:
-            try:
-                packet = self._transport.readPacket()
-                if packet.function.value not in self._rxQueues:
-                    pass
-                else:
-                    self._rxQueues[packet.function.value].put(packet)
-            except Exception as e:
-                # Only log the exception if we did not purposefully disconnect
-                if self._connected:
-                    print("Exception while reading transport, link probably closed?")
-                    print(e)
-                    import traceback
-
-                    print(traceback.format_exc())
-
-    cflib.cpx.CPXRouter.run = _patched_cpx_router_run
-except Exception:
-    pass
-
 NODE_NAME = "wifi_node"
 
 # How often to emit frame-level DEBUG messages to console (every N frames)
@@ -69,6 +44,29 @@ _LAND_RATE = 0.1        # m/s descent rate during landing
 _LAND_STEP = _LAND_RATE * _LOOP_INTERVAL  # m per loop iteration
 _LAND_CUTOFF = 0.05     # m — stop motors below this height
 _UNLOCK_PACKETS = 10    # unlock packets at loop rate before first hover setpoint (~500 ms)
+
+# Monkey-patch cflib's CPXRouter to suppress benign traceback logs when disconnecting
+try:
+    import cflib.cpx
+    import logging as _logging
+
+    _cpx_logger = _logging.getLogger(NODE_NAME)
+
+    def _patched_cpx_router_run(self):
+        while self._connected:
+            try:
+                packet = self._transport.readPacket()
+                if packet.function.value not in self._rxQueues:
+                    pass
+                else:
+                    self._rxQueues[packet.function.value].put(packet)
+            except Exception:
+                if self._connected:
+                    _cpx_logger.error("CPXRouter transport error", exc_info=True)
+
+    cflib.cpx.CPXRouter.run = _patched_cpx_router_run
+except Exception:
+    pass
 
 
 def _fill_sim_frame(

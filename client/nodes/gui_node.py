@@ -49,21 +49,21 @@ NODE_NAME = "gui_node"
 logger = setup_logging(NODE_NAME, level=logging.DEBUG)
 
 _SHORTCUTS = {
-    "Space":          "Take off / Land",
-    "Esc":            "Emergency stop",
-    "T":              "Toggle tracking mode",
-    "C":              "Stabilise (stop movement, hold altitude)",
-    "↑ / ↓":          "Forward / Backward",
-    "← / →":          "Strafe left / right",
-    "Shift+↑↓←→":    "Fast forward / backward / strafe",
-    "A / D":          "Yaw left / right",
-    "Shift+A / D":    "Fast yaw",
-    "W / S":          "Altitude up / down",
-    "Shift+W / S":    "Larger altitude step",
-    "Ctrl+Q":         "Exit",
-    "Ctrl+P":         "Process images",
-    "Ctrl+S":         "Save images",
-    "Ctrl+/":         "Keyboard shortcuts",
+    "Space": "Take off / Land",
+    "Esc": "Emergency stop",
+    "T": "Toggle tracking mode",
+    "C": "Stabilise (stop movement, hold altitude)",
+    "↑ / ↓": "Forward / Backward",
+    "← / →": "Strafe left / right",
+    "Shift+↑↓←→": "Fast forward / backward / strafe",
+    "A / D": "Yaw left / right",
+    "Shift+A / D": "Fast yaw",
+    "W / S": "Altitude up / down",
+    "Shift+W / S": "Larger altitude step",
+    "Ctrl+Q": "Exit",
+    "Ctrl+P": "Process images",
+    "Ctrl+S": "Save images",
+    "Ctrl+/": "Keyboard shortcuts",
 }
 
 APP_STATUS_TEXT = {
@@ -71,6 +71,7 @@ APP_STATUS_TEXT = {
     AppStatus.DISCONNECTED: "Disconnected",
     AppStatus.SIMULATING: "Connected (Simulating)",
 }
+
 
 class ImageReceiverThreadNode(Node, QThread):
     status_changed = Signal(str)
@@ -84,10 +85,18 @@ class ImageReceiverThreadNode(Node, QThread):
         self.logger.info(f"{NODE_NAME} running")
         self.status_changed.emit("Waiting for services...")
 
-        self.image_port = self.create_subscriber(ServiceName.IMAGE, ImageData, EventId.IMAGE_READY,
-                                  check_interruption=self.isInterruptionRequested)
-        self.telemetry_port = self.create_subscriber(ServiceName.TELEMETRY, TelemetryData, EventId.TELEMETRY_READY,
-                                  check_interruption=self.isInterruptionRequested)
+        self.image_port = self.create_subscriber(
+            ServiceName.IMAGE,
+            ImageData,
+            EventId.IMAGE_READY,
+            check_interruption=self.isInterruptionRequested,
+        )
+        self.telemetry_port = self.create_subscriber(
+            ServiceName.TELEMETRY,
+            TelemetryData,
+            EventId.TELEMETRY_READY,
+            check_interruption=self.isInterruptionRequested,
+        )
 
         if self.image_port.subscriber is None or self.telemetry_port.subscriber is None:
             self.status_changed.emit(APP_STATUS_TEXT[AppStatus.DISCONNECTED])
@@ -104,11 +113,11 @@ class ImageReceiverThreadNode(Node, QThread):
                 ids, result = waitset.wait_and_process_with_timeout(
                     iceoryx2.Duration.from_millis(10)
                 )
-                
+
                 # Explicitly yield the GIL so the Qt main thread can process
                 # key/mouse events without waiting for iceoryx2's blocking call.
                 time.sleep(0)
-                
+
                 for event_id in ids:
                     if event_id.has_event_from(image_guard):
                         sample = self.image_port.subscriber.receive()
@@ -123,19 +132,29 @@ class ImageReceiverThreadNode(Node, QThread):
                         if sample is not None:
                             data = sample.payload()
                             status_val = AppStatus(data.contents.status)
-                            self.status_changed.emit(APP_STATUS_TEXT.get(status_val, "Unknown State"))
+                            self.status_changed.emit(
+                                APP_STATUS_TEXT.get(status_val, "Unknown State")
+                            )
                             del data, sample
 
-        except (iceoryx2.NodeWaitFailure, iceoryx2.ListenerWaitError, KeyboardInterrupt):
+        except (
+            iceoryx2.NodeWaitFailure,
+            iceoryx2.ListenerWaitError,
+            KeyboardInterrupt,
+        ):
             pass
         except Exception as e:
             self.logger.error(f"{NODE_NAME} run error: {e}", exc_info=True)
         finally:
-            if 'image_guard' in locals(): image_guard.delete()
-            if 'telemetry_guard' in locals(): telemetry_guard.delete()
-            if 'waitset' in locals(): waitset.delete()
+            if "image_guard" in locals():
+                image_guard.delete()
+            if "telemetry_guard" in locals():
+                telemetry_guard.delete()
+            if "waitset" in locals():
+                waitset.delete()
 
         self.status_changed.emit(APP_STATUS_TEXT[AppStatus.DISCONNECTED])
+
 
 class ShortcutsDialog(QDialog):
     def __init__(self, parent=None):
@@ -161,11 +180,12 @@ class ShortcutsDialog(QDialog):
         layout.addWidget(table)
         layout.addWidget(buttons)
 
+
 class MainWindow(QMainWindow):
     PANEL_WIDTH = 300
     WINDOW_WIDTH = IMAGE_WIDTH * IMAGE_SCALING_FACTOR + PANEL_WIDTH
     WINDOW_HEIGHT = IMAGE_HEIGHT * IMAGE_SCALING_FACTOR
-    
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Crazyflie GUI")
@@ -178,17 +198,25 @@ class MainWindow(QMainWindow):
         self.resize(MainWindow.WINDOW_WIDTH, MainWindow.WINDOW_HEIGHT)
 
         # Command Node (Main Thread): Publishes commands instantly on UI events
-        self.command_node = Node("gui_cmd", level=logging.DEBUG, handle_signals=False)
-        
+        self.command_node = Node(
+            "gui_command", level=logging.DEBUG, handle_signals=False
+        )
+
         # Receiver Thread (Background): Blocks while waiting for high-frequency images
         self.image_receiver = ImageReceiverThreadNode()
 
         # Writer first, then reader
-        self.blackboard_writer = self.image_receiver.create_blackboard_writer("/config", CONFIG)
-        self.blackboard_reader = self.image_receiver.create_blackboard_reader("/config", CONFIG)
+        self.blackboard_writer = self.image_receiver.create_blackboard_writer(
+            "/config", CONFIG
+        )
+        self.blackboard_reader = self.image_receiver.create_blackboard_reader(
+            "/config", CONFIG
+        )
 
         # Command publisher setup
-        self.command_port = self.command_node.create_publisher(ServiceName.COMMAND, CommandData, EventId.COMMAND_READY)
+        self.command_port = self.command_node.create_publisher(
+            ServiceName.COMMAND, CommandData, EventId.COMMAND_READY
+        )
 
         self.image_receiver.status_changed.connect(self.statusBar().showMessage)
         self.image_receiver.image_received.connect(self.update_image)
@@ -213,7 +241,9 @@ class MainWindow(QMainWindow):
 
         settings_menu = menu_bar.addMenu("Settings")
 
-        process_images_enabled = self.image_receiver.blackboard_read(self.blackboard_reader, "process_images")
+        process_images_enabled = self.image_receiver.blackboard_read(
+            self.blackboard_reader, "process_images"
+        )
         self.process_images_action = QAction("Process images", self)
         self.process_images_action.setCheckable(True)
         self.process_images_action.setShortcut("Ctrl+P")
@@ -221,7 +251,9 @@ class MainWindow(QMainWindow):
         self.process_images_action.toggled.connect(self._on_process_images_toggled)
         settings_menu.addAction(self.process_images_action)
 
-        save_images_enabled = self.image_receiver.blackboard_read(self.blackboard_reader, "save_images")
+        save_images_enabled = self.image_receiver.blackboard_read(
+            self.blackboard_reader, "save_images"
+        )
         self.save_images_action = QAction("Save images", self)
         self.save_images_action.setCheckable(True)
         self.save_images_action.setShortcut("Ctrl+S")
@@ -252,7 +284,9 @@ class MainWindow(QMainWindow):
         video_layout.setSpacing(0)
         self.video_label = QLabel("Waiting for video stream...")
         self.video_label.setAlignment(Qt.AlignCenter)
-        self.video_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.video_label.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
         video_layout.addWidget(self.video_label)
         main_layout.addWidget(video_panel, 1)
 
@@ -268,8 +302,16 @@ class MainWindow(QMainWindow):
     @Slot(object)
     def update_image(self, pixels: np.ndarray):
         # logger.debug(f"Frame pixel sum: {pixels.sum()}") # Uncomment to verify if drone is sending identical frames
-        qt_img = QImage(pixels.data, IMAGE_WIDTH, IMAGE_HEIGHT, IMAGE_WIDTH, QImage.Format.Format_Grayscale8)
-        pixmap = QPixmap.fromImage(qt_img).scaledToWidth(self.video_label.width(), Qt.TransformationMode.SmoothTransformation)
+        qt_img = QImage(
+            pixels.data,
+            IMAGE_WIDTH,
+            IMAGE_HEIGHT,
+            IMAGE_WIDTH,
+            QImage.Format.Format_Grayscale8,
+        )
+        pixmap = QPixmap.fromImage(qt_img).scaledToWidth(
+            self.video_label.width(), Qt.TransformationMode.SmoothTransformation
+        )
         self.video_label.setPixmap(pixmap)
 
     def _show_about(self):
@@ -309,7 +351,8 @@ class MainWindow(QMainWindow):
         )
 
     def _publish_command(self, key: KeyCode, is_pressed: bool, shift: bool = False):
-        if self.command_port is None: return
+        if self.command_port is None:
+            return
         try:
             sample = self.command_port.publisher.loan_uninit()
             p = sample.payload().contents
@@ -317,16 +360,22 @@ class MainWindow(QMainWindow):
             p.is_pressed = is_pressed
             p.shift = shift
             sample.assume_init().send()
-            self.command_port.notifier.notify_with_custom_event_id(self.command_port.event)
+            self.command_port.notifier.notify_with_custom_event_id(
+                self.command_port.event
+            )
         except Exception as e:
             logger.warning(f"Command publish failed: {e}")
-    
+
     def _on_save_images_toggled(self, checked: bool):
-        self.image_receiver.blackboard_write(self.blackboard_writer, "save_images", checked)
+        self.image_receiver.blackboard_write(
+            self.blackboard_writer, "save_images", checked
+        )
         logger.info(f"Save images set to {checked}")
-    
+
     def _on_process_images_toggled(self, checked: bool):
-        self.image_receiver.blackboard_write(self.blackboard_writer, "process_images", checked)
+        self.image_receiver.blackboard_write(
+            self.blackboard_writer, "process_images", checked
+        )
         logger.info(f"Process images set to {checked}")
 
     def keyPressEvent(self, event):
@@ -336,18 +385,30 @@ class MainWindow(QMainWindow):
         shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
         key = event.key()
         match key:
-            case Qt.Key.Key_Space:  self._publish_command(KeyCode.SPACE, True)
-            case Qt.Key.Key_Escape: self._publish_command(KeyCode.ESC, True)
-            case Qt.Key.Key_Up:     self._publish_command(KeyCode.UP, True, shift)
-            case Qt.Key.Key_Down:   self._publish_command(KeyCode.DOWN, True, shift)
-            case Qt.Key.Key_Left:   self._publish_command(KeyCode.LEFT, True, shift)
-            case Qt.Key.Key_Right:  self._publish_command(KeyCode.RIGHT, True, shift)
-            case Qt.Key.Key_W:      self._publish_command(KeyCode.W, True, shift)
-            case Qt.Key.Key_A:      self._publish_command(KeyCode.A, True, shift)
-            case Qt.Key.Key_S:      self._publish_command(KeyCode.S, True, shift)
-            case Qt.Key.Key_D:      self._publish_command(KeyCode.D, True, shift)
-            case Qt.Key.Key_T:      self._publish_command(KeyCode.T, True)
-            case Qt.Key.Key_C:      self._publish_command(KeyCode.C, True, shift)
+            case Qt.Key.Key_Space:
+                self._publish_command(KeyCode.SPACE, True)
+            case Qt.Key.Key_Escape:
+                self._publish_command(KeyCode.ESC, True)
+            case Qt.Key.Key_Up:
+                self._publish_command(KeyCode.UP, True, shift)
+            case Qt.Key.Key_Down:
+                self._publish_command(KeyCode.DOWN, True, shift)
+            case Qt.Key.Key_Left:
+                self._publish_command(KeyCode.LEFT, True, shift)
+            case Qt.Key.Key_Right:
+                self._publish_command(KeyCode.RIGHT, True, shift)
+            case Qt.Key.Key_W:
+                self._publish_command(KeyCode.W, True, shift)
+            case Qt.Key.Key_A:
+                self._publish_command(KeyCode.A, True, shift)
+            case Qt.Key.Key_S:
+                self._publish_command(KeyCode.S, True, shift)
+            case Qt.Key.Key_D:
+                self._publish_command(KeyCode.D, True, shift)
+            case Qt.Key.Key_T:
+                self._publish_command(KeyCode.T, True)
+            case Qt.Key.Key_C:
+                self._publish_command(KeyCode.C, True, shift)
 
         super().keyPressEvent(event)
 
@@ -357,18 +418,30 @@ class MainWindow(QMainWindow):
             return
         key = event.key()
         match key:
-            case Qt.Key.Key_Space:  self._publish_command(KeyCode.SPACE, False)
-            case Qt.Key.Key_Escape: self._publish_command(KeyCode.ESC, False)
-            case Qt.Key.Key_Up:     self._publish_command(KeyCode.UP, False)
-            case Qt.Key.Key_Down:   self._publish_command(KeyCode.DOWN, False)
-            case Qt.Key.Key_Left:   self._publish_command(KeyCode.LEFT, False)
-            case Qt.Key.Key_Right:  self._publish_command(KeyCode.RIGHT, False)
-            case Qt.Key.Key_W:      self._publish_command(KeyCode.W, False)
-            case Qt.Key.Key_A:      self._publish_command(KeyCode.A, False)
-            case Qt.Key.Key_S:      self._publish_command(KeyCode.S, False)
-            case Qt.Key.Key_D:      self._publish_command(KeyCode.D, False)
-            case Qt.Key.Key_T:      self._publish_command(KeyCode.T, False)
-            case Qt.Key.Key_C:      self._publish_command(KeyCode.C, False)
+            case Qt.Key.Key_Space:
+                self._publish_command(KeyCode.SPACE, False)
+            case Qt.Key.Key_Escape:
+                self._publish_command(KeyCode.ESC, False)
+            case Qt.Key.Key_Up:
+                self._publish_command(KeyCode.UP, False)
+            case Qt.Key.Key_Down:
+                self._publish_command(KeyCode.DOWN, False)
+            case Qt.Key.Key_Left:
+                self._publish_command(KeyCode.LEFT, False)
+            case Qt.Key.Key_Right:
+                self._publish_command(KeyCode.RIGHT, False)
+            case Qt.Key.Key_W:
+                self._publish_command(KeyCode.W, False)
+            case Qt.Key.Key_A:
+                self._publish_command(KeyCode.A, False)
+            case Qt.Key.Key_S:
+                self._publish_command(KeyCode.S, False)
+            case Qt.Key.Key_D:
+                self._publish_command(KeyCode.D, False)
+            case Qt.Key.Key_T:
+                self._publish_command(KeyCode.T, False)
+            case Qt.Key.Key_C:
+                self._publish_command(KeyCode.C, False)
 
         super().keyReleaseEvent(event)
 
@@ -379,6 +452,7 @@ class MainWindow(QMainWindow):
         self.image_receiver.wait(3000)
         super().closeEvent(event)
 
+
 @click.command()
 @click.option("--sim", is_flag=True, expose_value=False, help="Run in simulation mode")
 def main():
@@ -387,10 +461,10 @@ def main():
         sys.exit(1)
 
     app = QApplication(sys.argv[:1])
-    
+
     try:
         window = MainWindow()
-        
+
         # Allow Ctrl+C to work by setting up a signal handler and a timer
         # This must be done AFTER window creation as Node overrides signals
         signal.signal(signal.SIGINT, lambda *args: app.quit())
@@ -405,6 +479,7 @@ def main():
         logger.error(f"GUI error: {e}")
     finally:
         logger.info("GUI shut down")
+
 
 if __name__ == "__main__":
     main()

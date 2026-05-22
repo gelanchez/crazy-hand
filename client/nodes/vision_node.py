@@ -242,7 +242,7 @@ class VisionNode(Node):
                 # LOGGING & OVERLAY DATA
                 # ======================================================
                 if results.hand_landmarks:
-                    self.logger.info(
+                    self.logger.debug(
                         f"Hand @ ({pixel_x},{pixel_y}) | "
                         f"Raw: {gesture_name} ({confidence}) | "
                         f"Stable: {stable_gesture}"
@@ -273,7 +273,7 @@ class VisionNode(Node):
                             cv2.LINE_AA,
                         )
                 else:
-                    self.logger.info("No hand detected")
+                    self.logger.debug("No hand detected")
 
                 # ======================================================
                 # PUBLISH PERCEPTION DATA

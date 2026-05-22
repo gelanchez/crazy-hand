@@ -1,9 +1,11 @@
+import atexit
 import logging
+import queue
 import sys
 import time
 
 from collections import deque
-from logging.handlers import RotatingFileHandler
+from logging.handlers import QueueHandler, QueueListener, RotatingFileHandler
 from pathlib import Path
 
 LOG_DIR = Path("data/logs")
@@ -20,7 +22,7 @@ _RESET = "\033[0m"
 
 _FMT = "%(asctime)s.%(msecs)03.0f %(levelname)-7s [%(name)s:%(lineno)d] %(message)s"
 
-_DATEFMT = "%H:%M:%S"
+_DATEFMT = "%Y-%m-%d %H:%M:%S"
 
 
 class _ColorFormatter(logging.Formatter):
@@ -58,18 +60,26 @@ def setup_logging(
         console_handler.setFormatter(plain_formatter)
     logger.addHandler(console_handler)
 
-    # FILE HANDLER — captures everything down to `level`
+    # ASYNC FILE HANDLER — background thread writes to disk, zero latency on callers
     if enable_file_logging:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
         file_handler = RotatingFileHandler(
             LOG_DIR / f"{name}.log",
-            maxBytes=1_000_000,  # 1 MB
+            maxBytes=3_000_000,  # 3 MB
             backupCount=1,
             encoding="utf-8",
         )
         file_handler.setLevel(level)
         file_handler.setFormatter(plain_formatter)
-        logger.addHandler(file_handler)
+
+        log_queue: queue.Queue = queue.Queue(-1)  # unbounded; background thread drains it
+        queue_handler = QueueHandler(log_queue)
+        queue_handler.setLevel(logging.NOTSET)  # pass all; file_handler does filtering
+        logger.addHandler(queue_handler)
+
+        listener = QueueListener(log_queue, file_handler, respect_handler_level=True)
+        listener.start()
+        atexit.register(listener.stop)
 
     return logger
 
