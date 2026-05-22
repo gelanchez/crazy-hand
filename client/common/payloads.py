@@ -1,22 +1,23 @@
 import ctypes
 
-from client.common.constants import AppStatus, IMAGE_SIZE
+from client.common.constants import AppStatus, FlightCommand, IMAGE_SIZE
 
 
 class ActionData(ctypes.Structure):
     _fields_ = [
         ("active", ctypes.c_bool),
+        ("command", ctypes.c_uint8),  # FlightCommand
         ("vx", ctypes.c_float),
         ("vy", ctypes.c_float),
         ("yawrate", ctypes.c_float),
         ("zdistance", ctypes.c_float),
-        ("_pad", ctypes.c_uint8 * 3),  # TODO needed?
     ]
 
     def __str__(self) -> str:
+        cmd = FlightCommand(self.command).name if self.command else "NONE"
         return (
-            f"ActionData(active={self.active}, vx={self.vx:.2f}, vy={self.vy:.2f}, "
-            f"yaw={self.yawrate:.1f}, z={self.zdistance:.2f})"
+            f"ActionData(active={self.active}, cmd={cmd}, vx={self.vx:.2f}, "
+            f"vy={self.vy:.2f}, yaw={self.yawrate:.1f}, z={self.zdistance:.2f})"
         )
 
 
@@ -24,10 +25,11 @@ class CommandData(ctypes.Structure):
     _fields_ = [
         ("key", ctypes.c_uint8),
         ("is_pressed", ctypes.c_bool),
+        ("shift", ctypes.c_bool),
     ]
 
     def __str__(self) -> str:
-        return f"CommandData(key={self.key}, is_pressed={self.is_pressed})"
+        return f"CommandData(key={self.key}, is_pressed={self.is_pressed}, shift={self.shift})"
 
 
 class ImageData(ctypes.Structure):

@@ -49,17 +49,21 @@ NODE_NAME = "gui_node"
 logger = setup_logging(NODE_NAME, level=logging.DEBUG)
 
 _SHORTCUTS = {
-    "Space":    "Arm / Disarm",
-    "Esc":      "Emergency stop",
-    "↑ / ↓":    "Forward / Backward",
-    "← / →":    "Strafe left / right",
-    "A / D":    "Yaw left / right",
-    "Z / X":    "Fast yaw left / right",
-    "W / S":    "Altitude up / down",
-    "Ctrl+Q":   "Exit",
-    "Ctrl+P":   "Process images",
-    "Ctrl+S":   "Save images",
-    "Ctrl+/":   "Keyboard shortcuts",
+    "Space":          "Take off / Land",
+    "Esc":            "Emergency stop",
+    "T":              "Toggle tracking mode",
+    "C":              "Stabilise (stop movement, hold altitude)",
+    "↑ / ↓":          "Forward / Backward",
+    "← / →":          "Strafe left / right",
+    "Shift+↑↓←→":    "Fast forward / backward / strafe",
+    "A / D":          "Yaw left / right",
+    "Shift+A / D":    "Fast yaw",
+    "W / S":          "Altitude up / down",
+    "Shift+W / S":    "Larger altitude step",
+    "Ctrl+Q":         "Exit",
+    "Ctrl+P":         "Process images",
+    "Ctrl+S":         "Save images",
+    "Ctrl+/":         "Keyboard shortcuts",
 }
 
 APP_STATUS_TEXT = {
@@ -304,13 +308,14 @@ class MainWindow(QMainWindow):
             """,
         )
 
-    def _publish_command(self, key: KeyCode, is_pressed: bool):
+    def _publish_command(self, key: KeyCode, is_pressed: bool, shift: bool = False):
         if self.command_port is None: return
         try:
             sample = self.command_port.publisher.loan_uninit()
             p = sample.payload().contents
             p.key = key
             p.is_pressed = is_pressed
+            p.shift = shift
             sample.assume_init().send()
             self.command_port.notifier.notify_with_custom_event_id(self.command_port.event)
         except Exception as e:
@@ -328,23 +333,21 @@ class MainWindow(QMainWindow):
         if event.isAutoRepeat():
             super().keyPressEvent(event)
             return
+        shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
         key = event.key()
         match key:
             case Qt.Key.Key_Space:  self._publish_command(KeyCode.SPACE, True)
             case Qt.Key.Key_Escape: self._publish_command(KeyCode.ESC, True)
-            case Qt.Key.Key_Up:     self._publish_command(KeyCode.UP, True)
-            case Qt.Key.Key_Down:   self._publish_command(KeyCode.DOWN, True)
-            case Qt.Key.Key_Left:   self._publish_command(KeyCode.LEFT, True)
-            case Qt.Key.Key_Right:  self._publish_command(KeyCode.RIGHT, True)
-            case Qt.Key.Key_Q:      self._publish_command(KeyCode.Q, True)
-            case Qt.Key.Key_W:      self._publish_command(KeyCode.W, True)
-            case Qt.Key.Key_E:      self._publish_command(KeyCode.E, True)
-            case Qt.Key.Key_A:      self._publish_command(KeyCode.A, True)
-            case Qt.Key.Key_S:      self._publish_command(KeyCode.S, True)
-            case Qt.Key.Key_D:      self._publish_command(KeyCode.D, True)
-            case Qt.Key.Key_Z:      self._publish_command(KeyCode.Z, True)
-            case Qt.Key.Key_X:      self._publish_command(KeyCode.X, True)
-            case Qt.Key.Key_C:      self._publish_command(KeyCode.C, True)
+            case Qt.Key.Key_Up:     self._publish_command(KeyCode.UP, True, shift)
+            case Qt.Key.Key_Down:   self._publish_command(KeyCode.DOWN, True, shift)
+            case Qt.Key.Key_Left:   self._publish_command(KeyCode.LEFT, True, shift)
+            case Qt.Key.Key_Right:  self._publish_command(KeyCode.RIGHT, True, shift)
+            case Qt.Key.Key_W:      self._publish_command(KeyCode.W, True, shift)
+            case Qt.Key.Key_A:      self._publish_command(KeyCode.A, True, shift)
+            case Qt.Key.Key_S:      self._publish_command(KeyCode.S, True, shift)
+            case Qt.Key.Key_D:      self._publish_command(KeyCode.D, True, shift)
+            case Qt.Key.Key_T:      self._publish_command(KeyCode.T, True)
+            case Qt.Key.Key_C:      self._publish_command(KeyCode.C, True, shift)
 
         super().keyPressEvent(event)
 
@@ -360,14 +363,11 @@ class MainWindow(QMainWindow):
             case Qt.Key.Key_Down:   self._publish_command(KeyCode.DOWN, False)
             case Qt.Key.Key_Left:   self._publish_command(KeyCode.LEFT, False)
             case Qt.Key.Key_Right:  self._publish_command(KeyCode.RIGHT, False)
-            case Qt.Key.Key_Q:      self._publish_command(KeyCode.Q, False)
             case Qt.Key.Key_W:      self._publish_command(KeyCode.W, False)
-            case Qt.Key.Key_E:      self._publish_command(KeyCode.E, False)
             case Qt.Key.Key_A:      self._publish_command(KeyCode.A, False)
             case Qt.Key.Key_S:      self._publish_command(KeyCode.S, False)
             case Qt.Key.Key_D:      self._publish_command(KeyCode.D, False)
-            case Qt.Key.Key_Z:      self._publish_command(KeyCode.Z, False)
-            case Qt.Key.Key_X:      self._publish_command(KeyCode.X, False)
+            case Qt.Key.Key_T:      self._publish_command(KeyCode.T, False)
             case Qt.Key.Key_C:      self._publish_command(KeyCode.C, False)
 
         super().keyReleaseEvent(event)

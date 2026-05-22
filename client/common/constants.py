@@ -47,8 +47,13 @@ class AppStatus(IntEnum):
 IMAGE_SCALING_FACTOR = 2  # 1 for original, 2 for upscaled
 
 # Flight control
-SPEED_FACTOR = 0.3  # m/s for vx/vy
-DEFAULT_HEIGHT = 0.3  # metres for initial take-off
+SPEED_FACTOR = 0.3       # m/s vx/vy normal
+FAST_SPEED_FACTOR = 0.6  # m/s vx/vy with Shift — untested, tune as needed
+DEFAULT_HEIGHT = 0.3     # m initial take-off altitude
+ALTITUDE_STEP = 0.1      # m per W/S press
+ALTITUDE_STEP_FAST = 0.2 # m per Shift+W/S press — untested
+YAW_RATE = 70.0          # deg/s normal yaw — untested, tune as needed
+YAW_RATE_FAST = 200.0    # deg/s Shift yaw — untested
 
 
 @unique
@@ -61,12 +66,25 @@ class KeyCode(IntEnum):
     DOWN = auto()
     LEFT = auto()
     RIGHT = auto()
-    Q = auto()
-    E = auto()
     W = auto()
     A = auto()
     S = auto()
     D = auto()
-    Z = auto()
-    X = auto()
+    T = auto()
     C = auto()
+
+
+@unique
+class FlightState(IntEnum):
+    IDLE = 0
+    AIRBORNE = auto()
+    TRACKING = auto()
+
+
+@unique
+class FlightCommand(IntEnum):
+    NONE = 0
+    TAKEOFF = auto()
+    LAND = auto()
+    EMERGENCY_STOP = auto()
+    TOGGLE_TRACKING = auto()

@@ -3,11 +3,18 @@ import logging
 import iceoryx2
 
 from client.common.constants import (
+    ALTITUDE_STEP,
+    ALTITUDE_STEP_FAST,
     DEFAULT_HEIGHT,
+    FAST_SPEED_FACTOR,
+    SPEED_FACTOR,
+    YAW_RATE,
+    YAW_RATE_FAST,
     EventId,
+    FlightCommand,
+    FlightState,
     KeyCode,
     ServiceName,
-    SPEED_FACTOR,
 )
 from client.common.node import Node
 from client.common.payloads import ActionData, CommandData, PerceptionData
@@ -16,7 +23,8 @@ from client.common.payloads import ActionData, CommandData, PerceptionData
 class ControlNode(Node):
     def __init__(self, level=logging.INFO):
         super().__init__("control_node", level=level)
-        self._active = False
+        self._state = FlightState.IDLE
+        self._flight_command = FlightCommand.NONE
         self._hover = {
             "vx": 0.0,
             "vy": 0.0,
@@ -95,8 +103,14 @@ class ControlNode(Node):
             if sample is None:
                 break
 
-            # Consume and discard for now # TODO
+            if self._state == FlightState.TRACKING:
+                self._apply_tracking(sample.payload().contents)
+
             del sample
+
+    def _apply_tracking(self, perception):
+        # Placeholder — tracking logic goes here
+        pass
 
     def _process_command(self):
         changed = False
@@ -111,44 +125,97 @@ class ControlNode(Node):
                 break
 
             command = sample.payload().contents
-            key = command.key
-            is_pressed = command.is_pressed
+            key = int(command.key)
+            is_pressed = bool(command.is_pressed)
+            shift = bool(command.shift)
             del command, sample
 
-            changed = True
+            speed = FAST_SPEED_FACTOR if shift else SPEED_FACTOR
+            yaw = YAW_RATE_FAST if shift else YAW_RATE
+            alt_step = ALTITUDE_STEP_FAST if shift else ALTITUDE_STEP
+            airborne = self._state in (FlightState.AIRBORNE, FlightState.TRACKING)
 
             match (is_pressed, key):
+                # --- Takeoff / Land ---
                 case (True, KeyCode.SPACE):
-                    self._active = True
+                    if self._state == FlightState.IDLE:
+                        self._state = FlightState.AIRBORNE
+                        self._flight_command = FlightCommand.TAKEOFF
+                        self.logger.info("TAKEOFF commanded")
+                        changed = True
+                    elif airborne:
+                        self._state = FlightState.IDLE
+                        self._hover["vx"] = self._hover["vy"] = self._hover["yawrate"] = 0.0
+                        self._flight_command = FlightCommand.LAND
+                        self.logger.info("LAND commanded")
+                        changed = True
+
+                # --- Emergency stop ---
                 case (True, KeyCode.ESC | KeyCode.WINDOW_CLOSED):
-                    self._active = False
+                    if self._state != FlightState.IDLE:
+                        self.logger.warning("EMERGENCY STOP")
+                    self._state = FlightState.IDLE
                     self._hover["vx"] = self._hover["vy"] = self._hover["yawrate"] = 0.0
-                case (True, KeyCode.UP):
-                    self._hover["vx"] = SPEED_FACTOR
-                case (True, KeyCode.DOWN):
-                    self._hover["vx"] = -SPEED_FACTOR
-                case (True, KeyCode.LEFT):
-                    self._hover["vy"] = SPEED_FACTOR
-                case (True, KeyCode.RIGHT):
-                    self._hover["vy"] = -SPEED_FACTOR
-                case (True, KeyCode.A):
-                    self._hover["yawrate"] = -70.0
-                case (True, KeyCode.D):
-                    self._hover["yawrate"] = 70.0
-                case (True, KeyCode.Z):
-                    self._hover["yawrate"] = -200.0
-                case (True, KeyCode.X):
-                    self._hover["yawrate"] = 200.0
-                case (True, KeyCode.W):
-                    self._hover["zdistance"] = min(2.0, self._hover["zdistance"] + 0.1)
-                case (True, KeyCode.S):
-                    self._hover["zdistance"] = max(0.1, self._hover["zdistance"] - 0.1)
+                    self._flight_command = FlightCommand.EMERGENCY_STOP
+                    changed = True
+
+                # --- Toggle tracking ---
+                case (True, KeyCode.T):
+                    if self._state == FlightState.AIRBORNE:
+                        self._state = FlightState.TRACKING
+                        self._flight_command = FlightCommand.TOGGLE_TRACKING
+                        self.logger.info("TRACKING mode ON")
+                        changed = True
+                    elif self._state == FlightState.TRACKING:
+                        self._state = FlightState.AIRBORNE
+                        self._flight_command = FlightCommand.TOGGLE_TRACKING
+                        self.logger.info("TRACKING mode OFF")
+                        changed = True
+
+                # --- Movement (only when airborne) ---
+                case (True, KeyCode.UP) if airborne:
+                    self._hover["vx"] = speed
+                    changed = True
+                case (True, KeyCode.DOWN) if airborne:
+                    self._hover["vx"] = -speed
+                    changed = True
+                case (True, KeyCode.LEFT) if airborne:
+                    self._hover["vy"] = speed
+                    changed = True
+                case (True, KeyCode.RIGHT) if airborne:
+                    self._hover["vy"] = -speed
+                    changed = True
+                case (True, KeyCode.A) if airborne:
+                    self._hover["yawrate"] = -yaw
+                    changed = True
+                case (True, KeyCode.D) if airborne:
+                    self._hover["yawrate"] = yaw
+                    changed = True
+                case (True, KeyCode.W) if airborne:
+                    self._hover["zdistance"] = min(2.0, self._hover["zdistance"] + alt_step)
+                    self.logger.info(f"Altitude → {self._hover['zdistance']:.2f}m")
+                    changed = True
+                case (True, KeyCode.S) if airborne:
+                    self._hover["zdistance"] = max(0.1, self._hover["zdistance"] - alt_step)
+                    self.logger.info(f"Altitude → {self._hover['zdistance']:.2f}m")
+                    changed = True
+
+                # --- Stabilise ---
+                case (True, KeyCode.C) if airborne:
+                    self._hover["vx"] = self._hover["vy"] = self._hover["yawrate"] = 0.0
+                    self.logger.info("Stabilised")
+                    changed = True
+
+                # --- Zero on release ---
                 case (False, KeyCode.UP | KeyCode.DOWN):
                     self._hover["vx"] = 0.0
+                    changed = True
                 case (False, KeyCode.LEFT | KeyCode.RIGHT):
                     self._hover["vy"] = 0.0
-                case (False, KeyCode.A | KeyCode.D | KeyCode.Z | KeyCode.X):
+                    changed = True
+                case (False, KeyCode.A | KeyCode.D):
                     self._hover["yawrate"] = 0.0
+                    changed = True
 
         if changed:
             self._publish_action()
@@ -157,20 +224,22 @@ class ControlNode(Node):
         try:
             sample = self.action_port.publisher.loan_uninit()
             p = sample.payload().contents
+            p.active = self._state != FlightState.IDLE
+            p.command = int(self._flight_command)
             p.vx, p.vy, p.yawrate, p.zdistance = (
                 self._hover["vx"],
                 self._hover["vy"],
                 self._hover["yawrate"],
                 self._hover["zdistance"],
             )
-            p.active = self._active
             sample.assume_init().send()
-            self.action_port.notifier.notify_with_custom_event_id(
-                self.action_port.event
-            )
+            self.action_port.notifier.notify_with_custom_event_id(self.action_port.event)
             self.logger.debug(
-                f"Action published: {p.vx}, {p.vy}, {p.yawrate}, {p.zdistance}, active={p.active}"
+                f"Action: state={self._state.name}, cmd={self._flight_command.name}, "
+                f"vx={p.vx:.2f}, vy={p.vy:.2f}, yaw={p.yawrate:.1f}, z={p.zdistance:.2f}"
             )
+            # Command is one-shot — reset after publish
+            self._flight_command = FlightCommand.NONE
         except Exception as e:
             self.logger.warning(f"Action publish failed: {e}")
 
