@@ -6,8 +6,7 @@ import time
 import iceoryx2
 
 from dataclasses import dataclass, field
-from pathlib import Path
-
+from client.common.constants import IOX2_CONFIG
 from client.common.utils import setup_logging
 
 
@@ -40,7 +39,6 @@ class BlackboardPort:
 
 
 class Node:
-    IOX2_CONFIG = Path(__file__).parent / "iceoryx2.toml"
     BLACKBOARD_KEY_TYPE = ctypes.c_uint64
 
     def __init__(self, name, level=logging.INFO, console_level=logging.INFO, handle_signals=True):
@@ -60,7 +58,7 @@ class Node:
 
         if handle_signals:
             try:
-                signal.signal(signal.SIGINT, self._signal_portr)
+                signal.signal(signal.SIGINT, self._signal_handler)
             except ValueError:
                 # signal.signal only works in the main thread
                 pass
@@ -68,8 +66,12 @@ class Node:
         self.running = True
         self.logger.info(f"Node {self.name} initialized")
 
-    def _signal_portr(self, sig, frame):
+    def _signal_handler(self, _sig, _frame):
         self.running = False
+
+    @staticmethod
+    def setup_iceoryx2_config() -> None:
+        iceoryx2.config.setup_global_config_from_file(iceoryx2.FilePath.new(str(IOX2_CONFIG)))
 
     def create_publisher(self, name, data_type, event_id) -> PublisherPort:
         service = (
@@ -92,12 +94,9 @@ class Node:
 
         return PublisherPort(publisher=publisher, notifier=notifier, event=event)
 
-    def create_subscriber(self, name, data_type, event_id, check_interruption=lambda: False) -> SubscriberPort:
-        def should_stop():
-            return not self.running or check_interruption()
-
+    def create_subscriber(self, name, data_type, event_id, check_interruption=lambda: False) -> SubscriberPort | None:
         service = None
-        while not should_stop():
+        while self.running and not check_interruption():
             try:
                 service = (
                     self.node.service_builder(iceoryx2.ServiceName.new(name))
@@ -107,7 +106,7 @@ class Node:
                 break
             except iceoryx2.PublishSubscribeOpenError:
                 time.sleep(0.1)
-        
+
         if service is None:
             return None
 
@@ -116,7 +115,7 @@ class Node:
         subscriber = service.subscriber_builder().create()
 
         event_service = None
-        while not should_stop():
+        while self.running and not check_interruption():
             try:
                 event_service = (
                     self.node.service_builder(iceoryx2.ServiceName.new(name))
@@ -126,7 +125,7 @@ class Node:
                 break
             except Exception:
                 time.sleep(0.1)
-        
+
         if event_service is None:
             return None
 
@@ -136,40 +135,33 @@ class Node:
 
         return SubscriberPort(subscriber=subscriber, listener=listener, event=event_id)
 
-    @staticmethod
-    def setup_iceoryx2_config() -> None:
-        iceoryx2.config.setup_global_config_from_file(iceoryx2.FilePath.new(str(Node.IOX2_CONFIG)))
-
     def create_blackboard_writer(self, name, entries) -> BlackboardPort:
         builder = (
             self.node.service_builder(iceoryx2.ServiceName.new(name))
             .blackboard_creator(Node.BLACKBOARD_KEY_TYPE)
         )
 
-        for _, field in entries.items():
-            builder = builder.add(field.key, field.default)
+        for _, f in entries.items():
+            builder = builder.add(f.key, f.default)
 
         service = builder.create()
-        writer = service.writer_builder().create()    
+        writer = service.writer_builder().create()
         blackboard_entries = {}
 
-        for entry_name, field in entries.items():
+        for entry_name, f in entries.items():
             blackboard_entries[entry_name] = BlackboardEntry(
-                key=field.key,
-                value_type=field.value_type,
-                entry=writer.entry(field.key, field.value_type),
+                key=f.key,
+                value_type=f.value_type,
+                entry=writer.entry(f.key, f.value_type),
             )
 
         self.logger.info(f"{name} blackboard writer created")
         return BlackboardPort(service=service, port=writer, entries=blackboard_entries)
 
     def create_blackboard_reader(self, name, entries, check_interruption=lambda: False) -> BlackboardPort | None:
-        def should_stop():
-            return (not self.running or check_interruption())
-
         service = None
 
-        while not should_stop():
+        while self.running and not check_interruption():
             try:
                 service = (
                     self.node.service_builder(iceoryx2.ServiceName.new(name))
@@ -186,11 +178,11 @@ class Node:
         reader = service.reader_builder().create()    
         blackboard_entries = {}
 
-        for entry_name, field in entries.items():
+        for entry_name, f in entries.items():
             blackboard_entries[entry_name] = BlackboardEntry(
-                key=field.key,
-                value_type=field.value_type,
-                entry=reader.entry(field.key, field.value_type),
+                key=f.key,
+                value_type=f.value_type,
+                entry=reader.entry(f.key, f.value_type),
             )
 
         self.logger.info(f"{name} blackboard reader connected")

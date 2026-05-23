@@ -1,4 +1,3 @@
-import glob
 import os
 import signal
 import subprocess
@@ -15,22 +14,21 @@ from client.common.utils import setup_logging
 
 logger = setup_logging("main")
 
+# Nodes that accept the --sim flag
+_SIM_NODES = {"wifi_node", "gui_node"}
+
 
 def cleanup_iceoryx2():
-    """
-    Cleans stale Iceoryx2 shared memory and temp files.
+    """Cleans stale iceoryx2 shared memory and temp files.
     Safe to run at startup when no nodes are running.
     """
-
-    # /dev/shm (shared memory)
-    for path in glob.glob("/dev/shm/iox2_*"):
+    for path in Path("/dev/shm").glob("iox2_*"):
         try:
-            os.remove(path)
+            path.unlink()
             logger.info(f"Removed shared memory: {path}")
         except Exception as e:
             logger.debug(f"Could not remove {path}: {e}")
 
-    # /tmp/iceoryx2 (temp files)
     tmp_dir = Path("/tmp/iceoryx2")
     if tmp_dir.exists():
         try:
@@ -40,22 +38,20 @@ def cleanup_iceoryx2():
             logger.debug(f"Could not remove /tmp/iceoryx2: {e}")
 
 
-@click.option("--sim", is_flag=True, help="Run in simulation mode")
 @click.command()
+@click.option("--sim", is_flag=True, help="Run in simulation mode")
 def main(sim):
     logger.info("Starting Crazyflie client")
 
-    # Find the python executable in the venv
-    venv_python = os.path.join(os.getcwd(), ".venv", "bin", "python")
-    if not os.path.exists(venv_python):
-        venv_python = sys.executable
+    venv_python = Path(__file__).parent.parent / ".venv" / "bin" / "python"
+    if not venv_python.exists():
+        venv_python = Path(sys.executable)
 
     Database.start_questdb()
-    Database.cleanup_old_data(24 * 7 * 30)  # 30 days
+    Database.cleanup_old_data(24 * 30)  # 30 days
 
     cleanup_iceoryx2()
 
-    processes = []
     nodes = [
         "wifi_node",
         "control_node",
@@ -64,59 +60,62 @@ def main(sim):
         "gui_node",
     ]
 
+    processes = []
+    crashed = False
+
     try:
-        # Start nodes as separate processes
-        # Using start_new_session=True to handle signals correctly
         for node in nodes:
             logger.info(f"Launching {node}...")
-            args = [venv_python, "-m", f"client.nodes.{node}"]
-            if sim:
+            args = [str(venv_python), "-m", f"client.nodes.{node}"]
+            if sim and node in _SIM_NODES:
                 args.append("--sim")
 
             env = {**os.environ, "PYTHONUNBUFFERED": "1"}
             process = subprocess.Popen(args, preexec_fn=os.setsid, env=env)
-            processes.append(process)
+            processes.append((node, process))
             time.sleep(0.1)
 
         logger.info("All nodes started. Press Ctrl+C to terminate.")
 
         while True:
-            for process in processes:
+            for node, process in processes:
                 if process.poll() is not None:
-                    node_cmd = " ".join(process.args)
                     if process.returncode in (0, -signal.SIGINT, -signal.SIGTERM):
-                        logger.info(f"Node '{node_cmd}' finished.")
+                        logger.info(f"Node '{node}' finished.")
                     else:
                         logger.error(
-                            f"Node '{node_cmd}' terminated unexpectedly with code {process.returncode}"
+                            f"Node '{node}' terminated unexpectedly with code {process.returncode}"
                         )
-                    raise KeyboardInterrupt
-            time.sleep(0.5)
+                        crashed = True
+                    break
+            else:
+                time.sleep(0.5)
+                continue
+            break
 
     except KeyboardInterrupt:
-        logger.info("Terminating all nodes...")
+        logger.info("Ctrl+C received, terminating all nodes...")
 
-        # Send SIGINT to all process groups
-        for process in processes:
+    if crashed:
+        logger.info("Node crash detected, terminating all nodes...")
+
+    for node, process in processes:
+        try:
+            os.killpg(os.getpgid(process.pid), signal.SIGINT)
+        except Exception:
+            pass
+
+    for node, process in processes:
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            logger.warning(f"Node '{node}' did not terminate in time, killing...")
             try:
-                os.killpg(os.getpgid(process.pid), signal.SIGINT)
+                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
             except Exception:
                 pass
 
-        # Wait for processes to exit gracefully
-        for process in processes:
-            try:
-                process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                logger.warning(
-                    f"Node {process.args} did not terminate in time, killing..."
-                )
-                try:
-                    os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-                except Exception:
-                    pass
-
-        logger.info("Client shutdown complete.")
+    logger.info("Client shutdown complete.")
 
 
 if __name__ == "__main__":

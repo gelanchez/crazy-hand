@@ -8,15 +8,12 @@ import urllib.parse
 from dataclasses import dataclass, fields
 from datetime import datetime
 from enum import Enum
-from pathlib import Path
 from typing import Union
 
 from questdb.ingress import IngressError, Sender
 
-from client.common.constants import AppStatus, FlightCommand
+from client.common.constants import AppStatus, FlightCommand, QUESTDB_SCRIPT
 from client.common.utils import setup_logging
-
-QUESTDB_SCRIPT = Path("/home/jose/apps/questdb-9.3.5-rt-linux-x86-64/bin/questdb.sh")
 
 logger = setup_logging("database")
 
@@ -69,12 +66,10 @@ class Database:
     def __init__(
         self,
         conf: str = "tcp::addr=127.0.0.1:9009;",
-        table_name: str = "telemetry_cf",
         precision: int = 2,
         flush_interval_s: float = 1.0,
     ):
         self.conf = conf
-        self.table_name = table_name
         self.precision = precision
         self.flush_interval_s = flush_interval_s
 
@@ -94,6 +89,12 @@ class Database:
         self._thread = threading.Thread(target=self._worker, daemon=True)
         self._thread.start()
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+
     # =====================================================
     # CONNECTION
     # =====================================================
@@ -103,6 +104,13 @@ class Database:
             return False
 
         try:
+            if self.sender is not None:
+                try:
+                    self.sender.close()
+                except Exception:
+                    pass
+                self.sender = None
+
             self.sender = Sender.from_conf(self.conf)
             self.sender.establish()
             logger.info("Connected to QuestDB")
@@ -147,6 +155,10 @@ class Database:
                     symbols[f.name] = val.name
                 elif isinstance(val, str):
                     symbols[f.name] = val
+                elif isinstance(val, bool):
+                    columns[f.name] = (
+                        val  # must precede int/float — bool is subclass of int
+                    )
                 else:
                     if isinstance(val, float):
                         val = round(val, self.precision)
@@ -158,7 +170,7 @@ class Database:
             if columns:
                 kwargs["columns"] = columns
 
-            table = getattr(sample, "TABLE", self.table_name)
+            table = sample.TABLE
 
             if table not in self.buffers:
                 self.buffers[table] = []
@@ -173,9 +185,6 @@ class Database:
     # =====================================================
 
     def flush(self):
-        if self.closed:
-            return
-
         if self.sender is None:
             if not self._connect():
                 return
@@ -211,8 +220,8 @@ class Database:
             logger.error(f"Flush error for {table}: {e}")
             self.sender = None
 
-            # restore lost data (optional choice)
-            self.buffers[table].extend(rows)
+            # restore lost data, preserving chronological order
+            self.buffers[table] = rows + self.buffers[table]
 
     # =====================================================
     # SHUTDOWN
@@ -223,12 +232,14 @@ class Database:
             return
 
         self._stop = True
+        self.closed = True  # worker checks this; stops immediately on next tick
 
         try:
             self._thread.join(timeout=2)
         except Exception:
             pass
 
+        # final flush after worker is stopped
         try:
             self.flush()
         except Exception:
@@ -241,13 +252,6 @@ class Database:
                 pass
 
         self.sender = None
-        self.closed = True
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        self.close()
 
     # =====================================================
     # QUESTDB STARTUP

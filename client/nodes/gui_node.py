@@ -4,12 +4,11 @@ import signal
 import sys
 import time
 import tomllib
+from pathlib import Path
 
 import click
 import iceoryx2
 import numpy as np
-
-from pathlib import Path
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QAction, QFont, QImage, QPixmap
@@ -131,7 +130,10 @@ class ImageReceiverThreadNode(Node, QThread):
                         sample = self.telemetry_port.subscriber.receive()
                         if sample is not None:
                             data = sample.payload()
-                            status_val = AppStatus(data.contents.status)
+                            try:
+                                status_val = AppStatus(data.contents.status)
+                            except ValueError:
+                                status_val = AppStatus.DISCONNECTED
                             fps = data.contents.fps
                             del data, sample
                             status_text = APP_STATUS_TEXT.get(status_val, "Unknown State")
@@ -148,12 +150,9 @@ class ImageReceiverThreadNode(Node, QThread):
         except Exception as e:
             self.logger.error(f"{NODE_NAME} run error: {e}", exc_info=True)
         finally:
-            if "image_guard" in locals():
-                image_guard.delete()
-            if "telemetry_guard" in locals():
-                telemetry_guard.delete()
-            if "waitset" in locals():
-                waitset.delete()
+            image_guard.delete()
+            telemetry_guard.delete()
+            waitset.delete()
 
         self.status_changed.emit(APP_STATUS_TEXT[AppStatus.DISCONNECTED])
 
@@ -194,8 +193,6 @@ class MainWindow(QMainWindow):
 
         with open(ROOT_DIR / "pyproject.toml", "rb") as f:
             self.project_config = tomllib.load(f)
-
-        self.resize(MainWindow.WINDOW_WIDTH, MainWindow.WINDOW_HEIGHT)
 
         self.resize(MainWindow.WINDOW_WIDTH, MainWindow.WINDOW_HEIGHT)
 
@@ -301,6 +298,22 @@ class MainWindow(QMainWindow):
         tele_layout.addStretch()
         main_layout.addWidget(tele_panel)
 
+    def _publish_command(self, key: KeyCode, is_pressed: bool, shift: bool = False):
+        if self.command_port is None:
+            return
+        try:
+            sample = self.command_port.publisher.loan_uninit()
+            p = sample.payload().contents
+            p.key = key
+            p.is_pressed = is_pressed
+            p.shift = shift
+            sample.assume_init().send()
+            self.command_port.notifier.notify_with_custom_event_id(
+                self.command_port.event
+            )
+        except Exception as e:
+            logger.warning(f"Command publish failed: {e}")
+
     @Slot(str)
     def _on_status_changed(self, text: str):
         self.statusBar().showMessage(text)
@@ -322,6 +335,20 @@ class MainWindow(QMainWindow):
             self.video_label.width(), Qt.TransformationMode.SmoothTransformation
         )
         self.video_label.setPixmap(pixmap)
+
+    @Slot(bool)
+    def _on_save_images_toggled(self, checked: bool):
+        self.image_receiver.blackboard_write(
+            self.blackboard_writer, "save_images", checked
+        )
+        logger.info(f"Save images set to {checked}")
+
+    @Slot(bool)
+    def _on_process_images_toggled(self, checked: bool):
+        self.image_receiver.blackboard_write(
+            self.blackboard_writer, "process_images", checked
+        )
+        logger.info(f"Process images set to {checked}")
 
     def _show_about(self):
         project = self.project_config["project"]
@@ -358,34 +385,6 @@ class MainWindow(QMainWindow):
             </p>
             """,
         )
-
-    def _publish_command(self, key: KeyCode, is_pressed: bool, shift: bool = False):
-        if self.command_port is None:
-            return
-        try:
-            sample = self.command_port.publisher.loan_uninit()
-            p = sample.payload().contents
-            p.key = key
-            p.is_pressed = is_pressed
-            p.shift = shift
-            sample.assume_init().send()
-            self.command_port.notifier.notify_with_custom_event_id(
-                self.command_port.event
-            )
-        except Exception as e:
-            logger.warning(f"Command publish failed: {e}")
-
-    def _on_save_images_toggled(self, checked: bool):
-        self.image_receiver.blackboard_write(
-            self.blackboard_writer, "save_images", checked
-        )
-        logger.info(f"Save images set to {checked}")
-
-    def _on_process_images_toggled(self, checked: bool):
-        self.image_receiver.blackboard_write(
-            self.blackboard_writer, "process_images", checked
-        )
-        logger.info(f"Process images set to {checked}")
 
     def keyPressEvent(self, event):
         if event.isAutoRepeat():

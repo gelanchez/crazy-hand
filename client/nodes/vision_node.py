@@ -1,13 +1,12 @@
+import ctypes
 import logging
 import time
+from pathlib import Path
 
 import cv2
 import iceoryx2
-import ctypes
-import numpy as np
-from pathlib import Path
-
 import mediapipe as mp
+import numpy as np
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
@@ -15,6 +14,7 @@ from client.common.blackboards import CONFIG
 from client.common.constants import (
     EventId,
     IMAGE_HEIGHT,
+    IMAGE_SIZE,
     IMAGE_WIDTH,
     ServiceName,
 )
@@ -66,14 +66,9 @@ class VisionNode(Node):
         self.current_candidate = None
         self.candidate_start_time = 0
 
-        self.confirmed_gesture = None
+        self.confirmed_gesture = "NONE"
         self.last_confirm_time = 0
 
-        # optional smoothing history
-        self.gesture_history = []
-
-        # image size
-        self.img_size = IMAGE_HEIGHT * IMAGE_WIDTH
 
     # =========================================================
     # STABLE GESTURE RESOLUTION
@@ -181,7 +176,7 @@ class VisionNode(Node):
                     pixels = np.frombuffer(
                         np.ctypeslib.as_array(raw_ptr),
                         dtype=np.uint8,
-                        count=self.img_size,
+                        count=IMAGE_SIZE,
                     ).copy()
 
                 finally:
@@ -195,7 +190,7 @@ class VisionNode(Node):
 
                 mp_image = mp.Image(
                     image_format=mp.ImageFormat.SRGB,
-                    data=pixels.astype(np.uint8),
+                    data=pixels,
                 )
 
                 # ======================================================
@@ -260,8 +255,8 @@ class VisionNode(Node):
                         pixels, (pixel_x, pixel_y), 5, (0, 255, 0), -1
                     )  # Green dot for center
 
-                    if stable_gesture:
-                        text = f"{stable_gesture} ({confidence:.2f})"
+                    if stable_gesture != "NONE":
+                        text = f"{stable_gesture} ({confidence or 0.0:.2f})"
                         cv2.putText(
                             pixels,
                             text,
@@ -274,6 +269,16 @@ class VisionNode(Node):
                         )
                 else:
                     self.logger.debug("No hand detected")
+                    cv2.putText(
+                        pixels,
+                        "No hand detected",
+                        (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7,
+                        (0, 0, 255),  # Red text
+                        2,
+                        cv2.LINE_AA,
+                    )
 
                 # ======================================================
                 # PUBLISH PERCEPTION DATA
@@ -284,7 +289,7 @@ class VisionNode(Node):
                     data.contents.id = img_id
                     data.contents.timestamp = img_timestamp
 
-                    if results.hand_landmarks and stable_gesture:
+                    if results.hand_landmarks:
                         data.contents.hand_detected = True
                         data.contents.hand_x = pixel_x
                         data.contents.hand_y = pixel_y

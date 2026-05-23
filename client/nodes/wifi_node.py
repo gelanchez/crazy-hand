@@ -152,22 +152,6 @@ class WifiNode(Node):
 
     # --- Image pipeline ---
 
-    def _prewarm_cpx_queue(self) -> None:
-        """Pre-register the CPX APP queue before _receive_images starts.
-
-        The cflib router silently drops packets whose function queue does not
-        exist yet (see CPXRouter.run()).  The queue is created lazily on the
-        first receivePacket() call, so if the GAP8 starts streaming before
-        that call is made the first N frames are lost and the stream never
-        recovers.  Calling receivePacket with a very short timeout here
-        creates the queue immediately after connect.
-        """
-        try:
-            self.cf.link.cpx.receivePacket(CPXFunction.APP, timeout=0.01)
-        except queue.Empty:
-            pass  # Expected — we just wanted the queue created
-        self.logger.info("CPX APP queue pre-registered")
-
     def _receive_images(self) -> None:
         self.logger.info("Image reception thread started")
         while self.running:
@@ -499,6 +483,22 @@ class WifiNode(Node):
 
     # --- Connection ---
 
+    def _prewarm_cpx_queue(self) -> None:
+        """Pre-register the CPX APP queue before _receive_images starts.
+
+        The cflib router silently drops packets whose function queue does not
+        exist yet (see CPXRouter.run()).  The queue is created lazily on the
+        first receivePacket() call, so if the GAP8 starts streaming before
+        that call is made the first N frames are lost and the stream never
+        recovers.  Calling receivePacket with a very short timeout here
+        creates the queue immediately after connect.
+        """
+        try:
+            self.cf.link.cpx.receivePacket(CPXFunction.APP, timeout=0.01)
+        except queue.Empty:
+            pass  # Expected — we just wanted the queue created
+        self.logger.info("CPX APP queue pre-registered")
+
     @staticmethod
     def check_connection(host=CRAZYFLIE_IP):
         param = "-n" if platform.system().lower() == "windows" else "-c"
@@ -509,28 +509,6 @@ class WifiNode(Node):
             )
             == 0
         )
-
-    def _run_sim(self) -> None:
-        _y = np.arange(IMAGE_HEIGHT, dtype=np.uint16).reshape(-1, 1)
-        _x = np.arange(IMAGE_WIDTH, dtype=np.uint16).reshape(1, -1)
-        threading.Thread(target=self._telemetry_loop, daemon=True).start()
-        while self.running:
-            self.node.wait(iceoryx2.Duration.from_millis(100))
-            if not self.running:
-                break
-            sample = self.image_port.publisher.loan_uninit()
-            payload = sample.payload().contents
-            payload.id = self._frame_id
-            payload.timestamp = int(time.time() * 1000)
-            image = np.ctypeslib.as_array(payload.pixels).reshape(
-                IMAGE_HEIGHT, IMAGE_WIDTH
-            )
-            _fill_sim_frame(image, self._frame_id, _y, _x)
-            self._frame_id += 1
-            sample.assume_init().send()
-            self.fps_counter.update()
-            self.logger.debug(f"FPS: {self.fps_counter.fps:.1f}")
-            self.image_port.notifier.notify_with_custom_event_id(self.image_port.event)
 
     def _check_required_decks(self) -> bool:
         """Verify AI-deck and Flow2 are attached by polling params.
@@ -603,6 +581,30 @@ class WifiNode(Node):
                 self.cf.open_link(CRAZYFLIE_URI)
 
         return self.running
+
+    # --- Simulation ---
+
+    def _run_sim(self) -> None:
+        _y = np.arange(IMAGE_HEIGHT, dtype=np.uint16).reshape(-1, 1)
+        _x = np.arange(IMAGE_WIDTH, dtype=np.uint16).reshape(1, -1)
+        threading.Thread(target=self._telemetry_loop, daemon=True).start()
+        while self.running:
+            self.node.wait(iceoryx2.Duration.from_millis(100))
+            if not self.running:
+                break
+            sample = self.image_port.publisher.loan_uninit()
+            payload = sample.payload().contents
+            payload.id = self._frame_id
+            payload.timestamp = int(time.time() * 1000)
+            image = np.ctypeslib.as_array(payload.pixels).reshape(
+                IMAGE_HEIGHT, IMAGE_WIDTH
+            )
+            _fill_sim_frame(image, self._frame_id, _y, _x)
+            self._frame_id += 1
+            sample.assume_init().send()
+            self.fps_counter.update()
+            self.logger.debug(f"FPS: {self.fps_counter.fps:.1f}")
+            self.image_port.notifier.notify_with_custom_event_id(self.image_port.event)
 
     # --- Entry point ---
 

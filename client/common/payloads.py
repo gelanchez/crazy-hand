@@ -14,7 +14,7 @@ class ActionData(ctypes.Structure):
     ]
 
     def __str__(self) -> str:
-        cmd = FlightCommand(self.command).name if self.command else "NONE"
+        cmd = FlightCommand(self.command).name
         return (
             f"ActionData(active={self.active}, cmd={cmd}, vx={self.vx:.2f}, "
             f"vy={self.vy:.2f}, yaw={self.yawrate:.1f}, z={self.zdistance:.2f})"

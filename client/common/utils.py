@@ -27,11 +27,10 @@ _DATEFMT = "%Y-%m-%d %H:%M:%S"
 
 class _ColorFormatter(logging.Formatter):
     def format(self, record):
-        message = super().format(record)
         color = _LEVEL_COLORS.get(record.levelname, "")
-        levelname = f"{record.levelname:<7}"
-        colored_level = f"{color}{levelname}{_RESET}"
-        return message.replace(levelname, colored_level, 1)
+        record = logging.makeLogRecord(record.__dict__)
+        record.levelname = f"{color}{record.levelname:<7}{_RESET}"
+        return super().format(record)
 
 
 def setup_logging(
@@ -72,7 +71,7 @@ def setup_logging(
         file_handler.setLevel(level)
         file_handler.setFormatter(plain_formatter)
 
-        log_queue: queue.Queue = queue.Queue(-1)  # unbounded; background thread drains it
+        log_queue: queue.Queue = queue.Queue()  # unbounded; background thread drains it
         queue_handler = QueueHandler(log_queue)
         queue_handler.setLevel(logging.NOTSET)  # pass all; file_handler does filtering
         logger.addHandler(queue_handler)
@@ -97,14 +96,12 @@ class FPSCounter:
         if self.last_time is not None:
             dt = now - self.last_time
 
-            # Reset if stream stalled
             if dt > self.timeout:
-                self.frame_intervals.clear()
-
-            if dt > 0:
+                self.frame_intervals.clear()  # stall — discard history and skip this interval
+            elif dt > 0:
                 self.frame_intervals.append(dt)
-                avg_dt = sum(self.frame_intervals) / len(self.frame_intervals)
-                self._fps = 1.0 / avg_dt
+                average_dt = sum(self.frame_intervals) / len(self.frame_intervals)
+                self._fps = 1.0 / average_dt
 
         self.last_time = now
         return self._fps
@@ -116,6 +113,9 @@ class FPSCounter:
 
     @property
     def fps(self):
-        if self.last_time is None or time.perf_counter() - self.last_time > self.timeout:
+        if (
+            self.last_time is None
+            or time.perf_counter() - self.last_time > self.timeout
+        ):
             return 0.0
         return self._fps

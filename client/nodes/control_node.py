@@ -20,9 +20,12 @@ from client.common.node import Node
 from client.common.payloads import ActionData, CommandData, PerceptionData
 
 
+NODE_NAME = "control_node"
+
+
 class ControlNode(Node):
     def __init__(self, level=logging.INFO):
-        super().__init__("control_node", level=level)
+        super().__init__(NODE_NAME, level=level)
         self._state = FlightState.IDLE
         self._flight_command = FlightCommand.NONE
         self._hover = {
@@ -32,65 +35,9 @@ class ControlNode(Node):
             "zdistance": DEFAULT_HEIGHT,
         }
 
-    def run(self):
-        self.logger.info(f"{self.name} running")
-
-        self.command_port = self.create_subscriber(
-            ServiceName.COMMAND, CommandData, EventId.COMMAND_READY
-        )
-        self.perception_port = self.create_subscriber(
-            ServiceName.PERCEPTION, PerceptionData, EventId.PERCEPTION_READY
-        )
-        self.action_port = self.create_publisher(
-            ServiceName.ACTION, ActionData, EventId.ACTION_READY
-        )
-
-        if (
-            self.command_port is None
-            or self.command_port.subscriber is None
-            or self.perception_port is None
-            or self.perception_port.subscriber is None
-            or self.action_port is None
-            or self.action_port.publisher is None
-        ):
-            self.logger.error("Failed to create ports")
-            return
-
-        waitset = iceoryx2.WaitSetBuilder.new().create(iceoryx2.ServiceType.Ipc)
-        command_guard = waitset.attach_notification(self.command_port.listener)
-        perception_guard = waitset.attach_notification(self.perception_port.listener)
-
-        try:
-            while self.running:
-                ids, result = waitset.wait_and_process_with_timeout(
-                    iceoryx2.Duration.from_millis(100)
-                )
-
-                if result in (
-                    iceoryx2.WaitSetRunResult.Interrupt,
-                    iceoryx2.WaitSetRunResult.TerminationRequest,
-                ):
-                    self.running = False
-                    break
-
-                for event_id in ids:
-                    if event_id.has_event_from(command_guard):
-                        self._process_command()
-                    elif event_id.has_event_from(perception_guard):
-                        self._process_perception()
-        except (
-            iceoryx2.NodeWaitFailure,
-            iceoryx2.ListenerWaitError,
-            KeyboardInterrupt,
-        ):
-            pass
-        except Exception as e:
-            self.logger.error(f"ControlNode error: {e}", exc_info=True)
-        finally:
-            command_guard.delete()
-            perception_guard.delete()
-            waitset.delete()
-            self.logger.info(f"{self.name} shut down")
+    def _apply_tracking(self, perception):
+        # Placeholder — tracking logic goes here
+        pass
 
     def _process_perception(self):
         while True:
@@ -108,9 +55,28 @@ class ControlNode(Node):
 
             del sample
 
-    def _apply_tracking(self, perception):
-        # Placeholder — tracking logic goes here
-        pass
+    def _publish_action(self):
+        try:
+            sample = self.action_port.publisher.loan_uninit()
+            p = sample.payload().contents
+            p.active = self._state != FlightState.IDLE
+            p.command = int(self._flight_command)
+            p.vx, p.vy, p.yawrate, p.zdistance = (
+                self._hover["vx"],
+                self._hover["vy"],
+                self._hover["yawrate"],
+                self._hover["zdistance"],
+            )
+            cmd_name = self._flight_command.name
+            sample.assume_init().send()
+            self._flight_command = FlightCommand.NONE  # one-shot — reset after successful send
+            self.action_port.notifier.notify_with_custom_event_id(self.action_port.event)
+            self.logger.debug(
+                f"Action: state={self._state.name}, cmd={cmd_name}, "
+                f"vx={p.vx:.2f}, vy={p.vy:.2f}, yaw={p.yawrate:.1f}, z={p.zdistance:.2f}"
+            )
+        except Exception as e:
+            self.logger.warning(f"Action publish failed: {e}")
 
     def _process_command(self):
         changed = False
@@ -146,6 +112,7 @@ class ControlNode(Node):
                     elif airborne:
                         self._state = FlightState.IDLE
                         self._hover["vx"] = self._hover["vy"] = self._hover["yawrate"] = 0.0
+                        self._hover["zdistance"] = DEFAULT_HEIGHT
                         self._flight_command = FlightCommand.LAND
                         self.logger.info("LAND commanded")
                         changed = True
@@ -156,6 +123,7 @@ class ControlNode(Node):
                         self.logger.warning("EMERGENCY STOP")
                     self._state = FlightState.IDLE
                     self._hover["vx"] = self._hover["vy"] = self._hover["yawrate"] = 0.0
+                    self._hover["zdistance"] = DEFAULT_HEIGHT
                     self._flight_command = FlightCommand.EMERGENCY_STOP
                     changed = True
 
@@ -220,28 +188,65 @@ class ControlNode(Node):
         if changed:
             self._publish_action()
 
-    def _publish_action(self):
+    def run(self):
+        self.logger.info(f"{self.name} running")
+
+        self.command_port = self.create_subscriber(
+            ServiceName.COMMAND, CommandData, EventId.COMMAND_READY
+        )
+        self.perception_port = self.create_subscriber(
+            ServiceName.PERCEPTION, PerceptionData, EventId.PERCEPTION_READY
+        )
+        self.action_port = self.create_publisher(
+            ServiceName.ACTION, ActionData, EventId.ACTION_READY
+        )
+
+        if (
+            self.command_port is None
+            or self.command_port.subscriber is None
+            or self.perception_port is None
+            or self.perception_port.subscriber is None
+            or self.action_port is None
+            or self.action_port.publisher is None
+        ):
+            self.logger.error("Failed to create ports")
+            return
+
+        waitset = iceoryx2.WaitSetBuilder.new().create(iceoryx2.ServiceType.Ipc)
+        command_guard = waitset.attach_notification(self.command_port.listener)
+        perception_guard = waitset.attach_notification(self.perception_port.listener)
+
         try:
-            sample = self.action_port.publisher.loan_uninit()
-            p = sample.payload().contents
-            p.active = self._state != FlightState.IDLE
-            p.command = int(self._flight_command)
-            p.vx, p.vy, p.yawrate, p.zdistance = (
-                self._hover["vx"],
-                self._hover["vy"],
-                self._hover["yawrate"],
-                self._hover["zdistance"],
-            )
-            sample.assume_init().send()
-            self.action_port.notifier.notify_with_custom_event_id(self.action_port.event)
-            self.logger.debug(
-                f"Action: state={self._state.name}, cmd={self._flight_command.name}, "
-                f"vx={p.vx:.2f}, vy={p.vy:.2f}, yaw={p.yawrate:.1f}, z={p.zdistance:.2f}"
-            )
-            # Command is one-shot — reset after publish
-            self._flight_command = FlightCommand.NONE
+            while self.running:
+                ids, result = waitset.wait_and_process_with_timeout(
+                    iceoryx2.Duration.from_millis(100)
+                )
+
+                if result in (
+                    iceoryx2.WaitSetRunResult.Interrupt,
+                    iceoryx2.WaitSetRunResult.TerminationRequest,
+                ):
+                    self.running = False
+                    break
+
+                for event_id in ids:
+                    if event_id.has_event_from(command_guard):
+                        self._process_command()
+                    elif event_id.has_event_from(perception_guard):
+                        self._process_perception()
+        except (
+            iceoryx2.NodeWaitFailure,
+            iceoryx2.ListenerWaitError,
+            KeyboardInterrupt,
+        ):
+            pass
         except Exception as e:
-            self.logger.warning(f"Action publish failed: {e}")
+            self.logger.error(f"ControlNode error: {e}", exc_info=True)
+        finally:
+            command_guard.delete()
+            perception_guard.delete()
+            waitset.delete()
+            self.logger.info(f"{self.name} shut down")
 
 
 def main():

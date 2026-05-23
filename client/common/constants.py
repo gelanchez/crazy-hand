@@ -1,15 +1,16 @@
 from enum import IntEnum, StrEnum, auto, unique
 from pathlib import Path
 
+# Paths
 IOX2_CONFIG = Path(__file__).parent / "iceoryx2.toml"
+QUESTDB_SCRIPT = Path.home() / "apps/questdb-9.3.5-rt-linux-x86-64/bin/questdb.sh"
 
-# Connection Constants
+# Network
 CRAZYFLIE_IP = "192.168.4.1"
 CRAZYFLIE_PORT = 5000
 CRAZYFLIE_URI = f"tcp://{CRAZYFLIE_IP}:{CRAZYFLIE_PORT}"
 
-
-# iceoryx2 service names
+# IPC
 @unique
 class ServiceName(StrEnum):
     ACTION = "/action"
@@ -19,7 +20,6 @@ class ServiceName(StrEnum):
     TELEMETRY = "/telemetry"
 
 
-# iceoryx2 events
 @unique
 class EventId(IntEnum):
     # 0 is reserved for dead notifiers
@@ -30,12 +30,12 @@ class EventId(IntEnum):
     TELEMETRY_READY = auto()
 
 
-# Image Configuration
+# Image
 IMAGE_WIDTH = 324
 IMAGE_HEIGHT = 244
 IMAGE_SIZE = IMAGE_WIDTH * IMAGE_HEIGHT
 
-
+# App state
 @unique
 class AppStatus(IntEnum):
     DISCONNECTED = 0
@@ -43,18 +43,33 @@ class AppStatus(IntEnum):
     SIMULATING = auto()
 
 
-# GUI
-IMAGE_SCALING_FACTOR = 2  # 1 for original, 2 for upscaled
+@unique
+class FlightState(IntEnum):
+    IDLE = 0
+    AIRBORNE = auto()
+    TRACKING = auto()
+
+
+@unique
+class FlightCommand(IntEnum):
+    NONE = 0
+    TAKEOFF = auto()
+    LAND = auto()
+    EMERGENCY_STOP = auto()
+    TOGGLE_TRACKING = auto()
+
 
 # Flight control
-SPEED_FACTOR = 0.3       # m/s vx/vy normal
-FAST_SPEED_FACTOR = 0.6  # m/s vx/vy with Shift — untested, tune as needed
-DEFAULT_HEIGHT = 0.3     # m initial take-off altitude
-ALTITUDE_STEP = 0.1      # m per W/S press
-ALTITUDE_STEP_FAST = 0.2 # m per Shift+W/S press — untested
-YAW_RATE = 70.0          # deg/s normal yaw — untested, tune as needed
-YAW_RATE_FAST = 200.0    # deg/s Shift yaw — untested
+SPEED_FACTOR = 0.3        # m/s vx/vy normal
+FAST_SPEED_FACTOR = 0.6   # m/s vx/vy with Shift
+DEFAULT_HEIGHT = 0.3      # m initial take-off altitude
+ALTITUDE_STEP = 0.1       # m per W/S press
+ALTITUDE_STEP_FAST = 0.2  # m per Shift+W/S press
+YAW_RATE = 70.0           # deg/s normal yaw
+YAW_RATE_FAST = 200.0     # deg/s Shift yaw
 
+# GUI
+IMAGE_SCALING_FACTOR = 2  # 1 for original, 2 for upscaled
 
 @unique
 class KeyCode(IntEnum):
@@ -72,19 +87,3 @@ class KeyCode(IntEnum):
     D = auto()
     T = auto()
     C = auto()
-
-
-@unique
-class FlightState(IntEnum):
-    IDLE = 0
-    AIRBORNE = auto()
-    TRACKING = auto()
-
-
-@unique
-class FlightCommand(IntEnum):
-    NONE = 0
-    TAKEOFF = auto()
-    LAND = auto()
-    EMERGENCY_STOP = auto()
-    TOGGLE_TRACKING = auto()
