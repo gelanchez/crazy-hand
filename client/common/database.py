@@ -12,7 +12,14 @@ from typing import Union
 
 from questdb.ingress import IngressError, Sender
 
-from client.common.constants import AppStatus, FlightCommand, QUESTDB_SCRIPT
+from client.common.constants import (
+    ActionSource,
+    AppStatus,
+    FlightCommand,
+    FlightState,
+    QUESTDB_CONF,
+    QUESTDB_SCRIPT,
+)
 from client.common.utils import setup_logging
 
 logger = setup_logging("database")
@@ -37,10 +44,14 @@ class ActionSample:
     ts: datetime
     active: bool
     command: FlightCommand
+    state: FlightState
+    source: ActionSource
     vx: float
     vy: float
     yawrate: float
     zdistance: float
+    ema_x: float
+    ema_y: float
 
 
 @dataclass
@@ -65,7 +76,7 @@ Sample = Union[TelemetrySample, ActionSample, PerceptionSample]
 class Database:
     def __init__(
         self,
-        conf: str = "tcp::addr=127.0.0.1:9009;",
+        conf: str = QUESTDB_CONF,
         precision: int = 2,
         flush_interval_s: float = 1.0,
     ):
@@ -309,7 +320,7 @@ class Database:
                 probe_sql = f"SELECT count() FROM {table} LIMIT 1"
                 Database._exec_sql(probe_sql)
 
-            except Exception as e:
+            except Exception:
                 # table likely does not exist → skip silently or debug log
                 logger.debug(f"[{table}] does not exist, skipping cleanup")
                 continue

@@ -38,8 +38,12 @@ NODE_NAME = "wifi_node"
 _FRAME_LOG_INTERVAL = 10
 
 # Action loop timing
-_LOOP_INTERVAL = 0.05   # seconds (~20 Hz) — CF watchdog needs setpoints at least every 500 ms
-_UNLOCK_PACKETS = 10    # unlock packets at loop rate before first hover setpoint (~500 ms)
+_LOOP_INTERVAL = (
+    0.05  # seconds (~20 Hz) — CF watchdog needs setpoints at least every 500 ms
+)
+_UNLOCK_PACKETS = (
+    10  # unlock packets at loop rate before first hover setpoint (~500 ms)
+)
 
 # Monkey-patch cflib to redirect all print() calls and logger output through our logger.
 # cflib uses bare print() throughout its transport and driver code — these bypass Python
@@ -106,7 +110,9 @@ try:
 
     cflib.cpx.transports.SocketTransport.__init__ = _patched_socket_transport_init
     cflib.cpx.transports.SocketTransport.connect = _patched_socket_transport_connect
-    cflib.cpx.transports.SocketTransport.disconnect = _patched_socket_transport_disconnect
+    cflib.cpx.transports.SocketTransport.disconnect = (
+        _patched_socket_transport_disconnect
+    )
 
     # TcpDriver.close — remove "Driver closed" print
     def _patched_tcp_driver_close(self):
@@ -186,7 +192,9 @@ class WifiNode(Node):
                 img_stream = bytearray()
                 assembly_ok = True
 
-                while len(img_stream) < size and self.running and self.cf.is_connected():
+                while (
+                    len(img_stream) < size and self.running and self.cf.is_connected()
+                ):
                     try:
                         packet = self.cf.link.cpx.receivePacket(
                             CPXFunction.APP, timeout=0.5
@@ -336,7 +344,9 @@ class WifiNode(Node):
     def _action_loop(self) -> None:
         self.logger.info("Action loop started")
         flying = False
-        unlocking = 0  # countdown: sends thrust=0 packets before first hover setpoint (~500 ms)
+        unlocking = (
+            0  # countdown: sends thrust=0 packets before first hover setpoint (~500 ms)
+        )
         hover = [0.0, 0.0, 0.0, DEFAULT_HEIGHT]  # vx, vy, yawrate, zdist
 
         while self.running:

@@ -1,16 +1,20 @@
 import ctypes
 
-from client.common.constants import AppStatus, FlightCommand, IMAGE_SIZE
+from client.common.constants import IMAGE_SIZE, AppStatus, FlightCommand
 
 
 class ActionData(ctypes.Structure):
     _fields_ = [
         ("active", ctypes.c_bool),
         ("command", ctypes.c_uint8),  # FlightCommand
+        ("state", ctypes.c_uint8),  # FlightState
+        ("source", ctypes.c_uint8),  # ActionSource
         ("vx", ctypes.c_float),
         ("vy", ctypes.c_float),
         ("yawrate", ctypes.c_float),
         ("zdistance", ctypes.c_float),
+        ("ema_x", ctypes.c_float),  # EMA-filtered hand x (0.0 when not tracking)
+        ("ema_y", ctypes.c_float),  # EMA-filtered hand y (0.0 when not tracking)
     ]
 
     def __str__(self) -> str:

@@ -13,6 +13,10 @@ from mediapipe.tasks.python import vision
 from client.common.blackboards import CONFIG
 from client.common.constants import (
     EventId,
+    GESTURE_DEBOUNCE_MS,
+    GESTURE_HYSTERESIS_MS,
+    GESTURE_MIN_CONFIDENCE,
+    GESTURE_THRESHOLD,
     IMAGE_HEIGHT,
     IMAGE_SIZE,
     IMAGE_WIDTH,
@@ -48,9 +52,9 @@ class VisionNode(Node):
             base_options=base_options,
             running_mode=vision.RunningMode.IMAGE,
             num_hands=1,
-            min_hand_detection_confidence=0.5,
-            min_hand_presence_confidence=0.5,
-            min_tracking_confidence=0.5,
+            min_hand_detection_confidence=GESTURE_MIN_CONFIDENCE,
+            min_hand_presence_confidence=GESTURE_MIN_CONFIDENCE,
+            min_tracking_confidence=GESTURE_MIN_CONFIDENCE,
         )
 
         self.recognizer = vision.GestureRecognizer.create_from_options(options)
@@ -58,9 +62,9 @@ class VisionNode(Node):
         # =========================================================
         # GESTURE FILTERING PARAMETERS
         # =========================================================
-        self.confidence_threshold = 0.65  # ignore weak predictions
-        self.debounce_ms = 300  # stable time required
-        self.hysteresis_ms = 200  # prevents fast switching back
+        self.confidence_threshold = GESTURE_THRESHOLD
+        self.debounce_ms = GESTURE_DEBOUNCE_MS
+        self.hysteresis_ms = GESTURE_HYSTERESIS_MS
 
         # state tracking
         self.current_candidate = None
@@ -68,7 +72,6 @@ class VisionNode(Node):
 
         self.confirmed_gesture = "NONE"
         self.last_confirm_time = 0
-
 
     # =========================================================
     # STABLE GESTURE RESOLUTION
@@ -222,8 +225,10 @@ class VisionNode(Node):
 
                 if results.gestures:
                     top = results.gestures[0][0]
-                    gesture_name = top.category_name
-                    confidence = float(top.score)
+                    # Open_Palm detection is unreliable — ignore it
+                    if top.category_name != "Open_Palm":
+                        gesture_name = top.category_name
+                        confidence = float(top.score)
 
                 # ======================================================
                 # FILTERED + STABLE GESTURE
@@ -255,8 +260,13 @@ class VisionNode(Node):
                         pixels, (pixel_x, pixel_y), 5, (0, 255, 0), -1
                     )  # Green dot for center
 
-                    if stable_gesture != "NONE":
-                        text = f"{stable_gesture} ({confidence or 0.0:.2f})"
+                    label = (
+                        stable_gesture
+                        if stable_gesture != "NONE"
+                        else (gesture_name or "")
+                    )
+                    if label and label != "NONE":
+                        text = f"{label} ({confidence or 0.0:.2f})"
                         cv2.putText(
                             pixels,
                             text,

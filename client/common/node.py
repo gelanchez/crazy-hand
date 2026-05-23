@@ -41,7 +41,9 @@ class BlackboardPort:
 class Node:
     BLACKBOARD_KEY_TYPE = ctypes.c_uint64
 
-    def __init__(self, name, level=logging.INFO, console_level=logging.INFO, handle_signals=True):
+    def __init__(
+        self, name, level=logging.INFO, console_level=logging.INFO, handle_signals=True
+    ):
         self.name = name
         self.logger = setup_logging(self.name, level=level, console_level=console_level)
 
@@ -71,20 +73,22 @@ class Node:
 
     @staticmethod
     def setup_iceoryx2_config() -> None:
-        iceoryx2.config.setup_global_config_from_file(iceoryx2.FilePath.new(str(IOX2_CONFIG)))
+        iceoryx2.config.setup_global_config_from_file(
+            iceoryx2.FilePath.new(str(IOX2_CONFIG))
+        )
 
     def create_publisher(self, name, data_type, event_id) -> PublisherPort:
         service = (
             self.node.service_builder(iceoryx2.ServiceName.new(name))
-                .publish_subscribe(data_type)
-                .open_or_create()
+            .publish_subscribe(data_type)
+            .open_or_create()
         )
         publisher = service.publisher_builder().create()
 
         event = (
             self.node.service_builder(iceoryx2.ServiceName.new(name))
-                .event()
-                .open_or_create()
+            .event()
+            .open_or_create()
         )
         notifier = event.notifier_builder().create()
         event = iceoryx2.EventId.new(event_id)
@@ -94,7 +98,9 @@ class Node:
 
         return PublisherPort(publisher=publisher, notifier=notifier, event=event)
 
-    def create_subscriber(self, name, data_type, event_id, check_interruption=lambda: False) -> SubscriberPort | None:
+    def create_subscriber(
+        self, name, data_type, event_id, check_interruption=lambda: False
+    ) -> SubscriberPort | None:
         service = None
         while self.running and not check_interruption():
             try:
@@ -136,10 +142,9 @@ class Node:
         return SubscriberPort(subscriber=subscriber, listener=listener, event=event_id)
 
     def create_blackboard_writer(self, name, entries) -> BlackboardPort:
-        builder = (
-            self.node.service_builder(iceoryx2.ServiceName.new(name))
-            .blackboard_creator(Node.BLACKBOARD_KEY_TYPE)
-        )
+        builder = self.node.service_builder(
+            iceoryx2.ServiceName.new(name)
+        ).blackboard_creator(Node.BLACKBOARD_KEY_TYPE)
 
         for _, f in entries.items():
             builder = builder.add(f.key, f.default)
@@ -158,7 +163,9 @@ class Node:
         self.logger.info(f"{name} blackboard writer created")
         return BlackboardPort(service=service, port=writer, entries=blackboard_entries)
 
-    def create_blackboard_reader(self, name, entries, check_interruption=lambda: False) -> BlackboardPort | None:
+    def create_blackboard_reader(
+        self, name, entries, check_interruption=lambda: False
+    ) -> BlackboardPort | None:
         service = None
 
         while self.running and not check_interruption():
@@ -175,7 +182,7 @@ class Node:
         if service is None:
             return None
 
-        reader = service.reader_builder().create()    
+        reader = service.reader_builder().create()
         blackboard_entries = {}
 
         for entry_name, f in entries.items():

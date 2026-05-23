@@ -10,9 +10,11 @@ import numpy as np
 
 from client.common.blackboards import CONFIG
 from client.common.constants import (
+    ActionSource,
     AppStatus,
     EventId,
     FlightCommand,
+    FlightState,
     IMAGE_HEIGHT,
     IMAGE_SIZE,
     IMAGE_WIDTH,
@@ -62,7 +64,9 @@ class LoggerNode(Node):
             finally:
                 self._save_queue.task_done()
 
-    def _enqueue_save(self, pixels_bytes: bytes, path: Path, label: str = "frame") -> None:
+    def _enqueue_save(
+        self, pixels_bytes: bytes, path: Path, label: str = "frame"
+    ) -> None:
         try:
             self._save_queue.put_nowait((pixels_bytes, path))
             self.logger.debug(f"Enqueued save: {path.name}")
@@ -72,9 +76,7 @@ class LoggerNode(Node):
     def _handle_image(self):
         sample = self.image_port.subscriber.receive()
         if sample is not None:
-            save_images = self.blackboard_read(
-                self.blackboard_reader, "save_images"
-            )
+            save_images = self.blackboard_read(self.blackboard_reader, "save_images")
             if save_images:
                 data = sample.payload()
                 # Copy pixels out of shared memory before releasing the sample
@@ -108,17 +110,19 @@ class LoggerNode(Node):
             self.logger.debug(f"Received Action: {data.contents}")
             c = data.contents
             command = FlightCommand(c.command)
-            zero = (
-                not c.active or command == FlightCommand.EMERGENCY_STOP
-            )
+            zero = not c.active or command == FlightCommand.EMERGENCY_STOP
             action_sample = ActionSample(
                 ts=datetime.now(timezone.utc),
                 active=c.active,
                 command=command,
+                state=FlightState(c.state),
+                source=ActionSource(c.source),
                 vx=0.0 if zero else c.vx,
                 vy=0.0 if zero else c.vy,
                 yawrate=0.0 if zero else c.yawrate,
                 zdistance=0.0 if zero else c.zdistance,
+                ema_x=c.ema_x,
+                ema_y=c.ema_y,
             )
             del c, data, sample
             self.database.log(action_sample)
@@ -131,9 +135,9 @@ class LoggerNode(Node):
 
             raw_gesture = data.contents.gesture_name
             if isinstance(raw_gesture, bytes):
-                gesture_name = raw_gesture.decode(
-                    "utf-8", errors="ignore"
-                ).rstrip("\x00")
+                gesture_name = raw_gesture.decode("utf-8", errors="ignore").rstrip(
+                    "\x00"
+                )
             else:
                 gesture_name = str(raw_gesture)
 
@@ -146,9 +150,7 @@ class LoggerNode(Node):
                 gesture_confidence=data.contents.gesture_confidence,
             )
 
-            save_images = self.blackboard_read(
-                self.blackboard_reader, "save_images"
-            )
+            save_images = self.blackboard_read(self.blackboard_reader, "save_images")
             if save_images:
                 processed_bytes = bytes(data.contents.processed_pixels)
                 proc_name = f"{data.contents.timestamp}.png"

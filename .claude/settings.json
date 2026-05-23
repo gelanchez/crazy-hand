@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/home/jose/.vscode/extensions/charliermarsh.ruff-2026.44.0-linux-x64/bundled/libs/bin/ruff format *)",
+      "Bash(/home/jose/.vscode/extensions/charliermarsh.ruff-2026.44.0-linux-x64/bundled/libs/bin/ruff check *)"
+    ]
+  }
+}

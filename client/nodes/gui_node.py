@@ -34,12 +34,13 @@ from client.common.constants import (
     EventId,
     IMAGE_HEIGHT,
     IMAGE_SCALING_FACTOR,
+    IMAGE_SIZE,
     IMAGE_WIDTH,
     KeyCode,
     ServiceName,
 )
 from client.common.node import Node
-from client.common.payloads import CommandData, ImageData, TelemetryData
+from client.common.payloads import CommandData, ImageData, PerceptionData, TelemetryData
 from client.common.utils import setup_logging
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -96,16 +97,34 @@ class ImageReceiverThreadNode(Node, QThread):
             EventId.TELEMETRY_READY,
             check_interruption=self.isInterruptionRequested,
         )
+        self.perception_port = self.create_subscriber(
+            ServiceName.PERCEPTION,
+            PerceptionData,
+            EventId.PERCEPTION_READY,
+            check_interruption=self.isInterruptionRequested,
+        )
 
         if self.image_port.subscriber is None or self.telemetry_port.subscriber is None:
             self.status_changed.emit(APP_STATUS_TEXT[AppStatus.DISCONNECTED])
             return
+
+        local_blackboard_reader = self.create_blackboard_reader(
+            "/config", CONFIG, check_interruption=self.isInterruptionRequested
+        )
 
         # Status remains WAITING until first telemetry payload arrives
 
         waitset = iceoryx2.WaitSetBuilder.new().create(iceoryx2.ServiceType.Ipc)
         image_guard = waitset.attach_notification(self.image_port.listener)
         telemetry_guard = waitset.attach_notification(self.telemetry_port.listener)
+        perception_guard = None
+        if (
+            self.perception_port is not None
+            and self.perception_port.subscriber is not None
+        ):
+            perception_guard = waitset.attach_notification(
+                self.perception_port.listener
+            )
 
         try:
             while not self.isInterruptionRequested() and self.running:
@@ -121,8 +140,29 @@ class ImageReceiverThreadNode(Node, QThread):
                     if event_id.has_event_from(image_guard):
                         sample = self.image_port.subscriber.receive()
                         if sample is not None:
+                            process_images = (
+                                local_blackboard_reader is not None
+                                and self.blackboard_read(
+                                    local_blackboard_reader, "process_images"
+                                )
+                            )
+                            if not process_images:
+                                data = sample.payload()
+                                pixels = np.ctypeslib.as_array(
+                                    data.contents.pixels
+                                ).copy()
+                                del data, sample
+                                self.image_received.emit(pixels)
+                            else:
+                                del sample
+
+                    elif perception_guard and event_id.has_event_from(perception_guard):
+                        sample = self.perception_port.subscriber.receive()
+                        if sample is not None:
                             data = sample.payload()
-                            pixels = np.ctypeslib.as_array(data.contents.pixels).copy()
+                            pixels = np.ctypeslib.as_array(
+                                data.contents.processed_pixels
+                            ).copy()
                             del data, sample
                             self.image_received.emit(pixels)
 
@@ -136,7 +176,9 @@ class ImageReceiverThreadNode(Node, QThread):
                                 status_val = AppStatus.DISCONNECTED
                             fps = data.contents.fps
                             del data, sample
-                            status_text = APP_STATUS_TEXT.get(status_val, "Unknown State")
+                            status_text = APP_STATUS_TEXT.get(
+                                status_val, "Unknown State"
+                            )
                             if fps > 0:
                                 status_text = f"{status_text} — {fps:.1f} fps"
                             self.status_changed.emit(status_text)
@@ -150,6 +192,8 @@ class ImageReceiverThreadNode(Node, QThread):
         except Exception as e:
             self.logger.error(f"{NODE_NAME} run error: {e}", exc_info=True)
         finally:
+            if perception_guard:
+                perception_guard.delete()
             image_guard.delete()
             telemetry_guard.delete()
             waitset.delete()
@@ -324,13 +368,25 @@ class MainWindow(QMainWindow):
     @Slot(object)
     def update_image(self, pixels: np.ndarray):
         # logger.debug(f"Frame pixel sum: {pixels.sum()}") # Uncomment to verify if drone is sending identical frames
-        qt_img = QImage(
-            pixels.data,
-            IMAGE_WIDTH,
-            IMAGE_HEIGHT,
-            IMAGE_WIDTH,
-            QImage.Format.Format_Grayscale8,
-        )
+        if pixels.size == IMAGE_SIZE * 3:
+            # RGB processed image from vision_node
+            rgb = pixels.reshape((IMAGE_HEIGHT, IMAGE_WIDTH, 3))
+            qt_img = QImage(
+                rgb.data,
+                IMAGE_WIDTH,
+                IMAGE_HEIGHT,
+                IMAGE_WIDTH * 3,
+                QImage.Format.Format_RGB888,
+            )
+        else:
+            # Grayscale raw image from wifi_node
+            qt_img = QImage(
+                pixels.data,
+                IMAGE_WIDTH,
+                IMAGE_HEIGHT,
+                IMAGE_WIDTH,
+                QImage.Format.Format_Grayscale8,
+            )
         pixmap = QPixmap.fromImage(qt_img).scaledToWidth(
             self.video_label.width(), Qt.TransformationMode.SmoothTransformation
         )
