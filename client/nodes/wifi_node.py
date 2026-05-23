@@ -37,11 +37,8 @@ NODE_NAME = "wifi_node"
 # How often to emit frame-level DEBUG messages to console (every N frames)
 _FRAME_LOG_INTERVAL = 10
 
-# Action loop timing and gentle landing parameters
+# Action loop timing
 _LOOP_INTERVAL = 0.05   # seconds (~20 Hz) — CF watchdog needs setpoints at least every 500 ms
-_LAND_RATE = 0.1        # m/s descent rate during landing
-_LAND_STEP = _LAND_RATE * _LOOP_INTERVAL  # m per loop iteration
-_LAND_CUTOFF = 0.05     # m — stop motors below this height
 _UNLOCK_PACKETS = 10    # unlock packets at loop rate before first hover setpoint (~500 ms)
 
 # Monkey-patch cflib to redirect all print() calls and logger output through our logger.
@@ -339,8 +336,7 @@ class WifiNode(Node):
     def _action_loop(self) -> None:
         self.logger.info("Action loop started")
         flying = False
-        landing = False
-        unlocking = 0  # countdown: sends thrust=0 packets before first hover setpoint
+        unlocking = 0  # countdown: sends thrust=0 packets before first hover setpoint (~500 ms)
         hover = [0.0, 0.0, 0.0, DEFAULT_HEIGHT]  # vx, vy, yawrate, zdist
 
         while self.running:
@@ -365,8 +361,7 @@ class WifiNode(Node):
                     hover[0] = act.vx
                     hover[1] = act.vy
                     hover[2] = act.yawrate
-                    if not landing:
-                        hover[3] = act.zdistance
+                    hover[3] = act.zdistance
                     del act, sample
 
                     match command:
@@ -374,18 +369,17 @@ class WifiNode(Node):
                             if not flying:
                                 self.logger.info(f"Taking off to z={hover[3]:.2f}m")
                                 flying = True
-                                landing = False
-                                unlocking = _UNLOCK_PACKETS
-                            elif landing:
-                                self.logger.info("Re-takeoff: cancelling landing")
-                                landing = False
                                 unlocking = _UNLOCK_PACKETS
 
                         case FlightCommand.LAND:
-                            if flying and not landing and unlocking == 0:
-                                self.logger.info(f"Landing from z={hover[3]:.2f}m")
-                                landing = True
-                                hover[0] = hover[1] = hover[2] = 0.0
+                            if flying:
+                                try:
+                                    self.cf.commander.send_stop_setpoint()
+                                except Exception as e:
+                                    self.logger.warning(f"Land stop error: {e}")
+                                flying = False
+                                unlocking = 0
+                                self.logger.info("Motors stopped — landed")
 
                         case FlightCommand.EMERGENCY_STOP:
                             self.logger.warning("EMERGENCY STOP — cutting motors")
@@ -394,7 +388,6 @@ class WifiNode(Node):
                             except Exception as e:
                                 self.logger.error(f"Emergency stop error: {e}")
                             flying = False
-                            landing = False
                             unlocking = 0
                             hover[0] = hover[1] = hover[2] = 0.0
 
@@ -405,23 +398,6 @@ class WifiNode(Node):
                         unlocking -= 1
                     except Exception as e:
                         self.logger.warning(f"Unlock error: {e}")
-                elif landing:
-                    hover[3] = max(_LAND_CUTOFF, hover[3] - _LAND_STEP)
-                    if hover[3] <= _LAND_CUTOFF:
-                        try:
-                            self.cf.commander.send_stop_setpoint()
-                        except Exception as e:
-                            self.logger.warning(f"Land stop error: {e}")
-                        flying = False
-                        landing = False
-                        unlocking = 0
-                        hover[3] = DEFAULT_HEIGHT
-                        self.logger.info("Landed")
-                    else:
-                        try:
-                            self.cf.commander.send_hover_setpoint(*hover)
-                        except Exception as e:
-                            self.logger.warning(f"Landing hover error: {e}")
                 else:
                     try:
                         self.cf.commander.send_hover_setpoint(*hover)

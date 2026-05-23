@@ -1,4 +1,5 @@
 import logging
+import time
 
 import iceoryx2
 
@@ -7,6 +8,8 @@ from client.common.constants import (
     ALTITUDE_STEP_FAST,
     DEFAULT_HEIGHT,
     FAST_SPEED_FACTOR,
+    LAND_CUTOFF,
+    LAND_RATE,
     SPEED_FACTOR,
     YAW_RATE,
     YAW_RATE_FAST,
@@ -19,7 +22,6 @@ from client.common.constants import (
 from client.common.node import Node
 from client.common.payloads import ActionData, CommandData, PerceptionData
 
-
 NODE_NAME = "control_node"
 
 
@@ -28,6 +30,7 @@ class ControlNode(Node):
         super().__init__(NODE_NAME, level=level)
         self._state = FlightState.IDLE
         self._flight_command = FlightCommand.NONE
+        self._last_land_tick: float = 0.0
         self._hover = {
             "vx": 0.0,
             "vy": 0.0,
@@ -54,6 +57,17 @@ class ControlNode(Node):
                 self._apply_tracking(sample.payload().contents)
 
             del sample
+
+    def _tick_landing(self):
+        now = time.monotonic()
+        dt = now - self._last_land_tick
+        self._last_land_tick = now
+        self._hover["zdistance"] = max(LAND_CUTOFF, self._hover["zdistance"] - LAND_RATE * dt)
+        if self._hover["zdistance"] <= LAND_CUTOFF:
+            self._flight_command = FlightCommand.LAND  # signal wifi_node to cut motors
+            self._state = FlightState.IDLE
+            self.logger.info("Landing complete — cutting motors")
+        self._publish_action()
 
     def _publish_action(self):
         try:
@@ -105,16 +119,20 @@ class ControlNode(Node):
                 # --- Takeoff / Land ---
                 case (True, KeyCode.SPACE):
                     if self._state == FlightState.IDLE:
+                        self._hover["zdistance"] = DEFAULT_HEIGHT
                         self._state = FlightState.AIRBORNE
                         self._flight_command = FlightCommand.TAKEOFF
                         self.logger.info("TAKEOFF commanded")
                         changed = True
+                    elif self._state == FlightState.LANDING:
+                        self._state = FlightState.AIRBORNE
+                        self.logger.info("Re-takeoff: cancelling landing")
+                        changed = True
                     elif airborne:
-                        self._state = FlightState.IDLE
+                        self._state = FlightState.LANDING
+                        self._last_land_tick = time.monotonic()
                         self._hover["vx"] = self._hover["vy"] = self._hover["yawrate"] = 0.0
-                        self._hover["zdistance"] = DEFAULT_HEIGHT
-                        self._flight_command = FlightCommand.LAND
-                        self.logger.info("LAND commanded")
+                        self.logger.info(f"LAND commanded from z={self._hover['zdistance']:.2f}m")
                         changed = True
 
                 # --- Emergency stop ---
@@ -219,7 +237,7 @@ class ControlNode(Node):
         try:
             while self.running:
                 ids, result = waitset.wait_and_process_with_timeout(
-                    iceoryx2.Duration.from_millis(100)
+                    iceoryx2.Duration.from_millis(50)
                 )
 
                 if result in (
@@ -234,6 +252,10 @@ class ControlNode(Node):
                         self._process_command()
                     elif event_id.has_event_from(perception_guard):
                         self._process_perception()
+
+                if self._state == FlightState.LANDING:
+                    self._tick_landing()
+
         except (
             iceoryx2.NodeWaitFailure,
             iceoryx2.ListenerWaitError,

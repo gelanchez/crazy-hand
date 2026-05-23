@@ -48,6 +48,7 @@ class FlightState(IntEnum):
     IDLE = 0
     AIRBORNE = auto()
     TRACKING = auto()
+    LANDING = auto()
 
 
 @unique
@@ -67,6 +68,8 @@ ALTITUDE_STEP = 0.1       # m per W/S press
 ALTITUDE_STEP_FAST = 0.2  # m per Shift+W/S press
 YAW_RATE = 70.0           # deg/s normal yaw
 YAW_RATE_FAST = 200.0     # deg/s Shift yaw
+LAND_RATE = 0.1           # m/s controlled descent rate
+LAND_CUTOFF = 0.05        # m — cut motors below this height
 
 # GUI
 IMAGE_SCALING_FACTOR = 2  # 1 for original, 2 for upscaled
