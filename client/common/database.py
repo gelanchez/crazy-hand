@@ -1,10 +1,9 @@
+import http.client
 import socket
 import subprocess
 import threading
 import time
-import http.client
 import urllib.parse
-
 from dataclasses import dataclass, fields
 from datetime import datetime
 from enum import Enum
@@ -13,12 +12,12 @@ from typing import Union
 from questdb.ingress import IngressError, Sender
 
 from client.common.constants import (
+    QUESTDB_CONF,
+    QUESTDB_SCRIPT,
     ActionSource,
     AppStatus,
     FlightCommand,
     FlightState,
-    QUESTDB_CONF,
-    QUESTDB_SCRIPT,
 )
 from client.common.utils import setup_logging
 

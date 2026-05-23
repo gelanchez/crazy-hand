@@ -2,7 +2,11 @@
   "permissions": {
     "allow": [
       "Bash(/home/jose/.vscode/extensions/charliermarsh.ruff-2026.44.0-linux-x64/bundled/libs/bin/ruff format *)",
-      "Bash(/home/jose/.vscode/extensions/charliermarsh.ruff-2026.44.0-linux-x64/bundled/libs/bin/ruff check *)"
+      "Bash(/home/jose/.vscode/extensions/charliermarsh.ruff-2026.44.0-linux-x64/bundled/libs/bin/ruff check *)",
+      "Bash(git stash *)",
+      "Bash(git checkout *)",
+      "Bash(git add *)",
+      "Bash(git commit -m 'WIP: hand control, tracking, gesture commands, telemetry expansion *)"
     ]
   }
 }

@@ -12,7 +12,6 @@ from mediapipe.tasks.python import vision
 
 from client.common.blackboards import CONFIG
 from client.common.constants import (
-    EventId,
     GESTURE_DEBOUNCE_MS,
     GESTURE_HYSTERESIS_MS,
     GESTURE_MIN_CONFIDENCE,
@@ -20,11 +19,11 @@ from client.common.constants import (
     IMAGE_HEIGHT,
     IMAGE_SIZE,
     IMAGE_WIDTH,
+    EventId,
     ServiceName,
 )
 from client.common.node import Node
 from client.common.payloads import ImageData, PerceptionData
-
 
 NODE_NAME = "vision_node"
 MODEL_PATH = Path("./data/gesture_recognizer.task")

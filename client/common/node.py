@@ -2,10 +2,10 @@ import ctypes
 import logging
 import signal
 import time
+from dataclasses import dataclass, field
 
 import iceoryx2
 
-from dataclasses import dataclass, field
 from client.common.constants import IOX2_CONFIG
 from client.common.utils import setup_logging
 

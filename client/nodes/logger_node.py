@@ -10,14 +10,14 @@ import numpy as np
 
 from client.common.blackboards import CONFIG
 from client.common.constants import (
+    IMAGE_HEIGHT,
+    IMAGE_SIZE,
+    IMAGE_WIDTH,
     ActionSource,
     AppStatus,
     EventId,
     FlightCommand,
     FlightState,
-    IMAGE_HEIGHT,
-    IMAGE_SIZE,
-    IMAGE_WIDTH,
     ServiceName,
 )
 from client.common.database import (

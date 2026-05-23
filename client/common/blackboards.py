@@ -1,5 +1,4 @@
 import ctypes
-
 from dataclasses import dataclass
 
 

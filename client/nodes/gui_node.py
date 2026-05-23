@@ -9,7 +9,6 @@ from pathlib import Path
 import click
 import iceoryx2
 import numpy as np
-
 from PySide6.QtCore import Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QAction, QFont, QImage, QPixmap
 from PySide6.QtWidgets import (
@@ -30,12 +29,12 @@ from PySide6.QtWidgets import (
 
 from client.common.blackboards import CONFIG
 from client.common.constants import (
-    AppStatus,
-    EventId,
     IMAGE_HEIGHT,
     IMAGE_SCALING_FACTOR,
     IMAGE_SIZE,
     IMAGE_WIDTH,
+    AppStatus,
+    EventId,
     KeyCode,
     ServiceName,
 )

@@ -31,5 +31,8 @@ requires-python = ">=3.12"
 Homepage = "https://github.com/gelanchez/crazy-hand-control"
 Repository = "https://github.com/gelanchez/crazy-hand-control.git"
 
+[tool.ruff.format]
+preview = true
+
 [tool.setuptools.packages.find]
 include = ["client*"]

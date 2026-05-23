@@ -2,40 +2,18 @@ import os
 import signal
 import subprocess
 import sys
-import shutil
 import time
-
 from pathlib import Path
 
 import click
 
 from client.common.database import Database
-from client.common.utils import setup_logging
+from client.common.utils import cleanup_iceoryx2, setup_logging
 
 logger = setup_logging("main")
 
 # Nodes that accept the --sim flag
 _SIM_NODES = {"wifi_node", "gui_node"}
-
-
-def cleanup_iceoryx2():
-    """Cleans stale iceoryx2 shared memory and temp files.
-    Safe to run at startup when no nodes are running.
-    """
-    for path in Path("/dev/shm").glob("iox2_*"):
-        try:
-            path.unlink()
-            logger.info(f"Removed shared memory: {path}")
-        except Exception as e:
-            logger.debug(f"Could not remove {path}: {e}")
-
-    tmp_dir = Path("/tmp/iceoryx2")
-    if tmp_dir.exists():
-        try:
-            shutil.rmtree(tmp_dir)
-            logger.info("Removed /tmp/iceoryx2")
-        except Exception as e:
-            logger.debug(f"Could not remove /tmp/iceoryx2: {e}")
 
 
 @click.command()

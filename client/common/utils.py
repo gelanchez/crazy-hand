@@ -1,9 +1,9 @@
 import atexit
 import logging
 import queue
+import shutil
 import sys
 import time
-
 from collections import deque
 from logging.handlers import QueueHandler, QueueListener, RotatingFileHandler
 from pathlib import Path
@@ -119,3 +119,25 @@ class FPSCounter:
         ):
             return 0.0
         return self._fps
+
+
+def cleanup_iceoryx2():
+    """Cleans stale iceoryx2 shared memory and temp files.
+    Safe to run at startup when no nodes are running.
+    """
+    logger = setup_logging("main")
+
+    for path in Path("/dev/shm").glob("iox2_*"):
+        try:
+            path.unlink()
+            logger.info(f"Removed shared memory: {path}")
+        except Exception as e:
+            logger.debug(f"Could not remove {path}: {e}")
+
+    tmp_dir = Path("/tmp/iceoryx2")
+    if tmp_dir.exists():
+        try:
+            shutil.rmtree(tmp_dir)
+            logger.info("Removed /tmp/iceoryx2")
+        except Exception as e:
+            logger.debug(f"Could not remove /tmp/iceoryx2: {e}")

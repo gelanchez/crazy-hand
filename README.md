@@ -7,7 +7,7 @@
 | `control_node` | `/action`     | `logger_node`, `wifi_node`                |
 | `gui_node`     | `/command`    | `control_node`                            |
 | `vision_node`  | `/perception` | `control_node`, `gui_node`, `logger_node` |
-| `wifi_node`    | `/telemetry`  | `control_node`, `gui_node`, `logger_node` |
+| `wifi_node`    | `/telemetry`  | `gui_node`, `logger_node`                 |
 | `wifi_node`    | `/image`      | `gui_node`, `logger_node`, `vision_node`  |
 
 ## INSTALLATION
@@ -22,7 +22,7 @@
 
 ### Python environment
 
-Create virtual enviroment and install dependencies:
+Create virtual environment and install dependencies:
 
 ```bash
 python3 -m venv .venv
@@ -184,6 +184,8 @@ python -m client.main --help
 ## TROUBLESHOOTING
 
 ### Clean Iceoryx2 memory
+
+> **Note:** `client.main` runs this cleanup automatically at startup. Use these commands only when running nodes manually.
 
 ```bash
 rm -rf /tmp/iceoryx2/*

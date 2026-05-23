@@ -12,20 +12,19 @@ import click
 import cv2
 import iceoryx2
 import numpy as np
-
-from cflib.crazyflie import Crazyflie
 from cflib.cpx import CPXFunction
+from cflib.crazyflie import Crazyflie
 
 from client.common.constants import (
     CRAZYFLIE_IP,
     CRAZYFLIE_URI,
-    AppStatus,
     DEFAULT_HEIGHT,
-    EventId,
-    FlightCommand,
     IMAGE_HEIGHT,
     IMAGE_SIZE,
     IMAGE_WIDTH,
+    AppStatus,
+    EventId,
+    FlightCommand,
     ServiceName,
 )
 from client.common.node import Node
@@ -49,11 +48,12 @@ _UNLOCK_PACKETS = (
 # cflib uses bare print() throughout its transport and driver code — these bypass Python
 # logging entirely and appear as noise on stdout/stderr during normal connect/disconnect cycles.
 try:
+    import logging as _logging
     import socket as _socket
+
     import cflib.cpx
     import cflib.cpx.transports
     import cflib.crtp.tcpdriver
-    import logging as _logging
 
     _cflib_logger = _logging.getLogger(NODE_NAME)
 
