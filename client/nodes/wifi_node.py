@@ -70,10 +70,18 @@ try:
         while self._connected:
             try:
                 packet = self._transport.readPacket()
+                # DIAGNOSTIC: log every non-CRTP packet to confirm APP data arrives
+                if packet.function.value != 3:  # 3 = CPXFunction.CRTP
+                    _cflib_logger.debug(
+                        "CPXRouter rx: fn=%s(%d) len=%d",
+                        packet.function, packet.function.value, len(packet.data),
+                    )
                 if packet.function.value not in self._rxQueues:
-                    pass
-                else:
-                    self._rxQueues[packet.function.value].put(packet)
+                    _cflib_logger.debug(
+                        "CPXRouter: auto-creating queue for %s", packet.function
+                    )
+                    self._rxQueues[packet.function.value] = queue.Queue()
+                self._rxQueues[packet.function.value].put(packet)
             except Exception:
                 if self._connected:
                     _cflib_logger.error("CPXRouter transport error", exc_info=True)
@@ -157,13 +165,23 @@ class WifiNode(Node):
 
     def _receive_images(self) -> None:
         self.logger.info("Image reception thread started")
+        _no_packet_count = 0
         while self.running:
             if self._reconnecting or not self.cf.is_connected():
                 time.sleep(0.2)
                 continue
             try:
                 packet = self.cf.link.cpx.receivePacket(CPXFunction.APP, timeout=0.5)
+                _no_packet_count = 0  # reset on success
             except queue.Empty:
+                _no_packet_count += 1
+                if _no_packet_count % 4 == 0:  # every ~2s
+                    self.logger.debug(
+                        "receive_images: no APP packet for ~%.0fs (reconnecting=%s, connected=%s)",
+                        _no_packet_count * 0.5,
+                        self._reconnecting,
+                        self.cf.is_connected() if hasattr(self, "cf") else "N/A",
+                    )
                 continue
             except Exception as e:
                 if self.running and self.cf.is_connected():
@@ -288,7 +306,7 @@ class WifiNode(Node):
                 self._reconnecting = True
                 try:
                     self.cf.close_link()
-                    time.sleep(1.5)
+                    time.sleep(3.0)  # give ESP32 time to clear TCP state before reconnect
                     self._cf_connected.clear()
                     self.cf.open_link(CRAZYFLIE_URI)
                     if self._cf_connected.wait(timeout=10.0) and self.cf.is_connected():
@@ -469,15 +487,49 @@ class WifiNode(Node):
 
     # --- Connection ---
 
-    def _prewarm_cpx_queue(self) -> None:
-        """Pre-register the CPX APP queue before _receive_images starts.
+    def _startup_link_reset(self) -> bool:
+        """Close link immediately after first connect and reopen.
 
-        The cflib router silently drops packets whose function queue does not
-        exist yet (see CPXRouter.run()).  The queue is created lazily on the
-        first receivePacket() call, so if the GAP8 starts streaming before
-        that call is made the first N frames are lost and the stream never
-        recovers.  Calling receivePacket with a very short timeout here
-        creates the queue immediately after connect.
+        GAP8's camera_task does not reliably start streaming on the FIRST
+        WIFI_CTRL(connected) notification it receives after boot.  Closing and
+        reopening the TCP link causes ESP32 to send a SECOND WIFI_CTRL(connected)
+        to GAP8, which reliably kicks the streaming pipeline.
+
+        This is safe to call unconditionally:
+        - If Python already connected in the first ~2 s of ESP32 boot, the extra
+          close/open adds only ~1.5 s of startup delay but still works correctly.
+        - If ESP32 has been running for 14+ s before Python connects (the common
+          failure mode) this reset is required for streaming to work at all.
+
+        Returns True if the reset succeeded, False otherwise (streaming may
+        still start via the watchdog on a subsequent reconnect).
+        """
+        self.logger.info("Startup link reset — re-triggering GAP8 streaming...")
+        try:
+            self.cf.close_link()
+            self._cf_connected.clear()
+            time.sleep(1.5)
+            self.cf.open_link(CRAZYFLIE_URI)
+            if self._cf_connected.wait(timeout=10.0) and self.cf.is_connected():
+                self.logger.info("Startup link reset complete")
+                return True
+            self.logger.warning(
+                "Startup link reset reconnect timed out — proceeding without reset"
+            )
+            return False
+        except Exception as e:
+            self.logger.error(f"Startup link reset error: {e}")
+            return False
+
+    def _prewarm_cpx_queue(self) -> None:
+        """Drain any stale early APP packets from the CPX queue after _connect_cf().
+
+        The patched CPXRouter.run() now creates queues on first packet (no silent
+        drops), so APP frames from GAP8 that arrived during the cflib handshake
+        are already queued by the time this is called.  Draining them here avoids
+        _receive_images() trying to assemble a partial/stale frame that began
+        before the connection was confirmed.  Any remaining queued frames are
+        still valid and will be processed normally.
         """
         try:
             self.cf.link.cpx.receivePacket(CPXFunction.APP, timeout=0.01)
@@ -628,37 +680,32 @@ class WifiNode(Node):
                 if not self._connect_cf():
                     return
 
-                # Startup link reset: deliberately close and reopen the link to
-                # trigger GAP8 image streaming.  On a clean first connection the
-                # GAP8 occasionally misses the WiFi-client-connected event and
-                # never starts transmitting.  A forced close+reopen replicates
-                # the TCP RST (errno 104) that naturally fixes this on marginal
-                # WiFi, making streaming reliable regardless of signal quality.
-                self.logger.info("Startup link reset — triggering GAP8 image stream...")
-                try:
-                    self.cf.close_link()
-                    time.sleep(1.5)
-                    self._cf_connected.clear()
-                    self.cf.open_link(CRAZYFLIE_URI)
-                    if not self._cf_connected.wait(timeout=10.0) or not self.cf.is_connected():
-                        self.logger.warning("Startup link reset failed — proceeding anyway")
-                    else:
-                        self.logger.info("Startup link reset complete")
-                except Exception as e:
-                    self.logger.warning(f"Startup link reset error: {e}")
+                # Startup link reset: close immediately and reopen to send GAP8 a
+                # second WIFI_CTRL(connected).  GAP8's camera_task does not stream
+                # reliably on the first such notification after boot; the second one
+                # consistently kicks the pipeline.  The ~1.5 s overhead is worth it.
+                self._startup_link_reset()
+
+                # Pre-register CPX APP queue immediately.  GAP8 starts streaming
+                # ~800 ms before cflib fires _on_connected; any APP packet that
+                # arrives before the queue exists is silently dropped by cflib's
+                # CPX router.  Registering here — right after the connection is
+                # confirmed — ensures no early frames are lost.
+                self._prewarm_cpx_queue()
+
+                # Start image reception immediately so queued frames are consumed
+                # while deck detection runs in parallel.
+                threading.Thread(target=self._receive_images, daemon=True).start()
 
                 # Check if AI-deck and Flow2 decks are attached
                 if not self._check_required_decks():
                     self.running = False
                     return
 
-                # Pre-register CPX APP queue to avoid silent frame drops at startup
-                self._prewarm_cpx_queue()
                 self._connect_time = time.time()
 
-                # START BACKGROUND THREADS
+                # START REMAINING BACKGROUND THREADS
                 threading.Thread(target=self._action_loop, daemon=True).start()
-                threading.Thread(target=self._receive_images, daemon=True).start()
                 threading.Thread(target=self._telemetry_loop, daemon=True).start()
                 threading.Thread(target=self._image_watchdog, daemon=True).start()
 
