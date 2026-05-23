@@ -628,6 +628,25 @@ class WifiNode(Node):
                 if not self._connect_cf():
                     return
 
+                # Startup link reset: deliberately close and reopen the link to
+                # trigger GAP8 image streaming.  On a clean first connection the
+                # GAP8 occasionally misses the WiFi-client-connected event and
+                # never starts transmitting.  A forced close+reopen replicates
+                # the TCP RST (errno 104) that naturally fixes this on marginal
+                # WiFi, making streaming reliable regardless of signal quality.
+                self.logger.info("Startup link reset — triggering GAP8 image stream...")
+                try:
+                    self.cf.close_link()
+                    time.sleep(1.5)
+                    self._cf_connected.clear()
+                    self.cf.open_link(CRAZYFLIE_URI)
+                    if not self._cf_connected.wait(timeout=10.0) or not self.cf.is_connected():
+                        self.logger.warning("Startup link reset failed — proceeding anyway")
+                    else:
+                        self.logger.info("Startup link reset complete")
+                except Exception as e:
+                    self.logger.warning(f"Startup link reset error: {e}")
+
                 # Check if AI-deck and Flow2 decks are attached
                 if not self._check_required_decks():
                     self.running = False
