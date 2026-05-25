@@ -9,7 +9,9 @@
       "Bash(git commit -m 'WIP: hand control, tracking, gesture commands, telemetry expansion *)",
       "Bash(python3 -c \"import cflib.crtp.tcpdriver; import inspect; print\\(inspect.getsource\\(cflib.crtp.tcpdriver.TcpDriver\\)\\)\")",
       "Bash(python3 -c ' *)",
-      "Bash(awk 'NR>=1780 && NR<=1900')"
+      "Bash(awk 'NR>=1780 && NR<=1900')",
+      "Bash(.venv/bin/pip show *)",
+      "Bash(.venv/bin/python --version)"
     ],
     "additionalDirectories": [
       "/tmp"
