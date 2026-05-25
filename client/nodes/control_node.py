@@ -358,28 +358,34 @@ class ControlNode(Node):
             self.logger.error("Failed to create ports")
             return
 
-        waitset = iceoryx2.WaitSetBuilder.new().create(iceoryx2.ServiceType.Ipc)
-        command_guard = waitset.attach_notification(self.command_port.listener)
-        perception_guard = waitset.attach_notification(self.perception_port.listener)
-
+        # TODO: Replace timed_wait_one workaround with WaitSet once the
+        # iceoryx2 spinning bug is fixed (see GitHub issue in thesis/Iceoryx2.md).
+        # Intended WaitSet code (2 attachments — command, perception):
+        #
+        #   waitset = iceoryx2.WaitSetBuilder.new().create(iceoryx2.ServiceType.Ipc)
+        #   command_guard    = waitset.attach_notification(self.command_port.listener)
+        #   perception_guard = waitset.attach_notification(self.perception_port.listener)
+        #   while self.running:
+        #       ids, result = waitset.wait_and_process_with_timeout(Duration.from_millis(50))
+        #       for event_id in ids:
+        #           if event_id.has_event_from(command_guard): self._process_command()
+        #           elif event_id.has_event_from(perception_guard): self._process_perception()
+        #       if self._state == FlightState.LANDING: self._tick_landing()
+        #   finally: command_guard.delete(); perception_guard.delete(); waitset.delete()
+        #
+        # Workaround: WaitSet spins at 100% CPU after any listener receives its first
+        # notification — even with 2 attachments and a 50ms timeout (iceoryx2 v0.9.0).
         try:
             while self.running:
-                ids, result = waitset.wait_and_process_with_timeout(
+                # Block up to 50ms waiting for a perception event
+                event_id = self.perception_port.listener.timed_wait_one(
                     iceoryx2.Duration.from_millis(50)
                 )
+                if event_id == self.perception_port.event:
+                    self._process_perception()
 
-                if result in (
-                    iceoryx2.WaitSetRunResult.Interrupt,
-                    iceoryx2.WaitSetRunResult.TerminationRequest,
-                ):
-                    self.running = False
-                    break
-
-                for event_id in ids:
-                    if event_id.has_event_from(command_guard):
-                        self._process_command()
-                    elif event_id.has_event_from(perception_guard):
-                        self._process_perception()
+                # Non-blocking drain of command subscriber each iteration
+                self._process_command()
 
                 if self._state == FlightState.LANDING:
                     self._tick_landing()
@@ -393,9 +399,6 @@ class ControlNode(Node):
         except Exception as e:
             self.logger.error(f"ControlNode error: {e}", exc_info=True)
         finally:
-            command_guard.delete()
-            perception_guard.delete()
-            waitset.delete()
             self.logger.info(f"{self.name} shut down")
 
 

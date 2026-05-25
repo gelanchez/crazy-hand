@@ -154,10 +154,24 @@ void camera_task(void *parameters) {
         pi_camera_capture_async(
             &camera, g_buff_img, IMG_SIZE,
             pi_task_callback(&g_task, image_capture_done_cb, NULL));
-        xEventGroupWaitBits(g_eventGroup, CAPTURE_DONE_BIT, pdTRUE, pdFALSE,
-                            (TickType_t)portMAX_DELAY);
+        // 5000ms safety timeout — protects against permanent DMA hang.
+        // IMPORTANT: do NOT add xEventGroupClearBits here or warmup STOP/START
+        // cycles — those desync VSYNC and corrupt every frame (162-byte row offset).
+        EventBits_t captureBits = xEventGroupWaitBits(
+            g_eventGroup, CAPTURE_DONE_BIT, pdTRUE, pdFALSE,
+            pdMS_TO_TICKS(5000));
         pi_camera_control(&camera, PI_CAMERA_CMD_STOP, 0);
         captureTime = xTaskGetTickCount() - start;
+
+        if (!(captureBits & CAPTURE_DONE_BIT)) {
+            cpxPrintToConsole(LOG_TO_CRTP,
+                "[WARNING] DMA timeout — reinitializing camera\n");
+            if (setup_camera(&camera)) {
+                cpxPrintToConsole(LOG_TO_CRTP, "[ERROR] Camera reinit failed\n");
+                vTaskDelay(pdMS_TO_TICKS(1000));
+            }
+            continue;
+        }
 
         if (g_wifiClientConnected) {
             // PROCESS

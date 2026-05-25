@@ -70,12 +70,6 @@ try:
         while self._connected:
             try:
                 packet = self._transport.readPacket()
-                # DIAGNOSTIC: log every non-CRTP packet to confirm APP data arrives
-                if packet.function.value != 3:  # 3 = CPXFunction.CRTP
-                    _cflib_logger.debug(
-                        "CPXRouter rx: fn=%s(%d) len=%d",
-                        packet.function, packet.function.value, len(packet.data),
-                    )
                 if packet.function.value not in self._rxQueues:
                     _cflib_logger.debug(
                         "CPXRouter: auto-creating queue for %s", packet.function
@@ -145,8 +139,10 @@ def _fill_sim_frame(
 
 
 class WifiNode(Node):
-    # Seconds without a frame before watchdog reconnects
-    _NO_IMAGE_TIMEOUT = 5.0
+    # Seconds without a frame before watchdog reconnects.
+    # GAP8 may need up to ~10 s to reinit camera and start streaming after
+    # a power-on or after a CPX reconnect; 30 s avoids thrashing.
+    _NO_IMAGE_TIMEOUT = 30.0
 
     def __init__(self, sim=False):
         # DEBUG goes to file; console stays at INFO to avoid per-frame spam
@@ -191,12 +187,6 @@ class WifiNode(Node):
 
             try:
                 data = packet.data
-                # Add a verbose debug print to see EXACTLY what we are receiving
-                if data:
-                    self.logger.debug(
-                        f"Received CPX APP packet: len={len(data)}, first_byte=0x{data[0]:02X}"
-                    )
-
                 if len(data) != 11 or data[0] != 0xBC:
                     continue
 
@@ -284,7 +274,8 @@ class WifiNode(Node):
 
         When the TCP connection is re-established the ESP32 re-sends
         WIFI_CTRL_STATUS_CLIENT_CONNECTED to the GAP8, which restarts
-        the camera_task streaming loop.
+        the camera_task streaming loop.  Uses _startup_link_reset() so GAP8
+        reliably starts streaming on the second WIFI_CTRL(connected) signal.
         """
         self.logger.info("Image watchdog started")
         while self.running:
@@ -299,29 +290,51 @@ class WifiNode(Node):
             )
             elapsed = time.time() - ref
 
-            if elapsed > self._NO_IMAGE_TIMEOUT:
-                self.logger.warning(
-                    f"No images for {elapsed:.0f}s — reconnecting to restart GAP8 streaming..."
-                )
-                self._reconnecting = True
+            if elapsed <= self._NO_IMAGE_TIMEOUT:
+                continue
+
+            self.logger.warning(
+                f"No images for {elapsed:.0f}s — reconnecting to restart GAP8 streaming..."
+            )
+            self._reconnecting = True
+            try:
+                # Close dead link so _startup_link_reset starts clean
                 try:
                     self.cf.close_link()
-                    time.sleep(3.0)  # give ESP32 time to clear TCP state before reconnect
-                    self._cf_connected.clear()
-                    self.cf.open_link(CRAZYFLIE_URI)
-                    if self._cf_connected.wait(timeout=10.0) and self.cf.is_connected():
+                except Exception:
+                    pass
+
+                # Wait for drone WiFi to be reachable (important after power cycles).
+                # 60 s covers the full ESP32 boot + AP-up sequence.
+                deadline = time.time() + 60.0
+                while self.running and time.time() < deadline:
+                    if WifiNode.check_connection():
+                        break
+                    self.logger.info("Watchdog: waiting for drone WiFi...")
+                    time.sleep(3.0)
+
+                if not self.running:
+                    return
+
+                if not WifiNode.check_connection():
+                    self.logger.warning(
+                        "Drone unreachable after 60s — will retry"
+                    )
+                else:
+                    # _startup_link_reset: close + 1.5s + reopen, triggers GAP8
+                    if self._startup_link_reset():
                         self._prewarm_cpx_queue()
                         self.logger.info(
                             "Watchdog reconnect successful — waiting for images..."
                         )
                     else:
                         self.logger.warning("Watchdog reconnect failed, will retry")
-                except Exception as e:
-                    self.logger.error(f"Watchdog reconnect error: {e}")
-                finally:
-                    # Always reset the timer so we don't reconnect in a tight loop
-                    self._last_frame_time = time.time()
-                    self._reconnecting = False
+            except Exception as e:
+                self.logger.error(f"Watchdog reconnect error: {e}")
+            finally:
+                # Reset timer so we don't reconnect in a tight loop
+                self._last_frame_time = time.time()
+                self._reconnecting = False
 
     # --- Telemetry ---
 
@@ -419,6 +432,11 @@ class WifiNode(Node):
                             unlocking = 0
                             hover[0] = hover[1] = hover[2] = 0.0
 
+            if self._reconnecting:
+                # Link is dead — skip all sends to avoid Broken pipe spam
+                time.sleep(_LOOP_INTERVAL)
+                continue
+
             if flying:
                 if unlocking > 0:
                     try:
@@ -483,7 +501,7 @@ class WifiNode(Node):
         self._cf_connected.set()
 
     def _on_disconnected(self, uri: str) -> None:
-        self.logger.warning(f"Crazyflie disconnected: {uri}")
+        self.logger.info(f"Crazyflie disconnected: {uri}")
 
     # --- Connection ---
 
@@ -522,20 +540,27 @@ class WifiNode(Node):
             return False
 
     def _prewarm_cpx_queue(self) -> None:
-        """Drain any stale early APP packets from the CPX queue after _connect_cf().
+        """Pre-register the CPX APP queue and drain any stale packets.
 
-        The patched CPXRouter.run() now creates queues on first packet (no silent
+        The patched CPXRouter.run() creates queues on first packet (no silent
         drops), so APP frames from GAP8 that arrived during the cflib handshake
-        are already queued by the time this is called.  Draining them here avoids
-        _receive_images() trying to assemble a partial/stale frame that began
-        before the connection was confirmed.  Any remaining queued frames are
-        still valid and will be processed normally.
+        are already queued by the time this is called.  Draining them all here
+        avoids _receive_images() trying to assemble a partial/stale frame that
+        began before the connection was fully confirmed.
         """
-        try:
-            self.cf.link.cpx.receivePacket(CPXFunction.APP, timeout=0.01)
-        except queue.Empty:
-            pass  # Expected — we just wanted the queue created
-        self.logger.info("CPX APP queue pre-registered")
+        drained = 0
+        while True:
+            try:
+                self.cf.link.cpx.receivePacket(CPXFunction.APP, timeout=0.01)
+                drained += 1
+            except queue.Empty:
+                break
+        if drained:
+            self.logger.info(
+                f"CPX APP queue pre-registered (drained {drained} stale packet(s))"
+            )
+        else:
+            self.logger.info("CPX APP queue pre-registered (empty)")
 
     @staticmethod
     def check_connection(host=CRAZYFLIE_IP):

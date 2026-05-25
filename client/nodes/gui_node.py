@@ -113,74 +113,94 @@ class ImageReceiverThreadNode(Node, QThread):
 
         # Status remains WAITING until first telemetry payload arrives
 
-        waitset = iceoryx2.WaitSetBuilder.new().create(iceoryx2.ServiceType.Ipc)
-        image_guard = waitset.attach_notification(self.image_port.listener)
-        telemetry_guard = waitset.attach_notification(self.telemetry_port.listener)
-        perception_guard = None
-        if (
+        # TODO: Replace sleep-based polling with WaitSet once the
+        # iceoryx2 spinning bug is fixed (see GitHub issue in thesis/Iceoryx2.md).
+        # Intended WaitSet code (3 attachments — image, telemetry, perception):
+        #
+        #   waitset = iceoryx2.WaitSetBuilder.new().create(iceoryx2.ServiceType.Ipc)
+        #   image_guard = waitset.attach_notification(self.image_port.listener)
+        #   telemetry_guard = waitset.attach_notification(self.telemetry_port.listener)
+        #   if self.perception_port is not None ...:
+        #       perception_guard = waitset.attach_notification(self.perception_port.listener)
+        #   while ...:
+        #       ids, result = waitset.wait_and_process_with_timeout(Duration.from_millis(10))
+        #       for event_id in ids:
+        #           if event_id.has_event_from(image_guard):
+        #               sample = image_port.subscriber.receive(); ...emit raw pixels
+        #           elif event_id.has_event_from(telemetry_guard):
+        #               sample = telemetry_port.subscriber.receive(); ...emit status
+        #           elif event_id.has_event_from(perception_guard):
+        #               sample = perception_port.subscriber.receive(); ...emit processed pixels
+        #   finally: [all guards].delete(); waitset.delete()
+
+        has_perception = (
             self.perception_port is not None
             and self.perception_port.subscriber is not None
-        ):
-            perception_guard = waitset.attach_notification(
-                self.perception_port.listener
-            )
+        )
 
         try:
             while not self.isInterruptionRequested() and self.running:
-                ids, result = waitset.wait_and_process_with_timeout(
-                    iceoryx2.Duration.from_millis(10)
-                )
-
-                # Explicitly yield the GIL so the Qt main thread can process
-                # key/mouse events without waiting for iceoryx2's blocking call.
+                # Sleep-based polling — avoids WaitSet spinning bug AND any
+                # potential issues with timed_wait_one blocking Qt rendering.
+                # Display node: 10ms polling (~100 Hz) is sufficient.
+                time.sleep(0.010)
+                # Yield GIL so Qt main thread can process key/mouse events.
                 time.sleep(0)
 
-                for event_id in ids:
-                    if event_id.has_event_from(image_guard):
-                        sample = self.image_port.subscriber.receive()
-                        if sample is not None:
-                            process_images = (
-                                local_blackboard_reader is not None
-                                and self.blackboard_read(
-                                    local_blackboard_reader, "process_images"
-                                )
-                            )
-                            if not process_images:
-                                data = sample.payload()
-                                pixels = np.ctypeslib.as_array(
-                                    data.contents.pixels
-                                ).copy()
-                                del data, sample
-                                self.image_received.emit(pixels)
-                            else:
-                                del sample
+                process_images = (
+                    local_blackboard_reader is not None
+                    and self.blackboard_read(local_blackboard_reader, "process_images")
+                )
 
-                    elif perception_guard and event_id.has_event_from(perception_guard):
+                # Drain image subscriber — display the latest raw frame
+                latest = None
+                while True:
+                    s = self.image_port.subscriber.receive()
+                    if s is None:
+                        break
+                    if latest is not None:
+                        del latest
+                    latest = s
+                if latest is not None and not process_images:
+                    data = latest.payload()
+                    pixels = np.ctypeslib.as_array(data.contents.pixels).copy()
+                    del data, latest
+                    self.image_received.emit(pixels)
+                elif latest is not None:
+                    del latest
+
+                # Drain perception subscriber — display latest processed frame
+                if has_perception:
+                    while True:
                         sample = self.perception_port.subscriber.receive()
-                        if sample is not None:
+                        if sample is None:
+                            break
+                        if process_images:
                             data = sample.payload()
                             pixels = np.ctypeslib.as_array(
                                 data.contents.processed_pixels
                             ).copy()
                             del data, sample
                             self.image_received.emit(pixels)
+                        else:
+                            del sample
 
-                    elif event_id.has_event_from(telemetry_guard):
-                        sample = self.telemetry_port.subscriber.receive()
-                        if sample is not None:
-                            data = sample.payload()
-                            try:
-                                status_val = AppStatus(data.contents.status)
-                            except ValueError:
-                                status_val = AppStatus.DISCONNECTED
-                            fps = data.contents.fps
-                            del data, sample
-                            status_text = APP_STATUS_TEXT.get(
-                                status_val, "Unknown State"
-                            )
-                            if fps > 0:
-                                status_text = f"{status_text} — {fps:.1f} fps"
-                            self.status_changed.emit(status_text)
+                # Drain telemetry subscriber — update status bar
+                while True:
+                    sample = self.telemetry_port.subscriber.receive()
+                    if sample is None:
+                        break
+                    data = sample.payload()
+                    try:
+                        status_val = AppStatus(data.contents.status)
+                    except ValueError:
+                        status_val = AppStatus.DISCONNECTED
+                    fps = data.contents.fps
+                    del data, sample
+                    status_text = APP_STATUS_TEXT.get(status_val, "Unknown State")
+                    if fps > 0:
+                        status_text = f"{status_text} — {fps:.1f} fps"
+                    self.status_changed.emit(status_text)
 
         except (
             iceoryx2.NodeWaitFailure,
@@ -190,12 +210,6 @@ class ImageReceiverThreadNode(Node, QThread):
             pass
         except Exception as e:
             self.logger.error(f"{NODE_NAME} run error: {e}", exc_info=True)
-        finally:
-            if perception_guard:
-                perception_guard.delete()
-            image_guard.delete()
-            telemetry_guard.delete()
-            waitset.delete()
 
         self.status_changed.emit(APP_STATUS_TEXT[AppStatus.DISCONNECTED])
 
@@ -343,6 +357,7 @@ class MainWindow(QMainWindow):
 
     def _publish_command(self, key: KeyCode, is_pressed: bool, shift: bool = False):
         if self.command_port is None:
+            logger.warning("Command port is None — command dropped")
             return
         try:
             sample = self.command_port.publisher.loan_uninit()

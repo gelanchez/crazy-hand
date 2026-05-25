@@ -1,6 +1,7 @@
 import logging
 import queue
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -44,6 +45,9 @@ class LoggerNode(Node):
             target=self._image_save_worker, daemon=True
         )
         self._save_thread.start()
+        # Cached blackboard values — refreshed at most once per second
+        self._save_images: bool = False
+        self._save_images_last_read: float = 0.0
 
     def _image_save_worker(self):
         """Consume (pixels_bytes, path) tuples and write them to disk."""
@@ -64,6 +68,19 @@ class LoggerNode(Node):
             finally:
                 self._save_queue.task_done()
 
+    def _get_save_images(self) -> bool:
+        """Return save_images flag, refreshing from blackboard at most once per second."""
+        now = time.monotonic()
+        if now - self._save_images_last_read >= 1.0:
+            try:
+                self._save_images = self.blackboard_read(
+                    self.blackboard_reader, "save_images"
+                )
+            except Exception:
+                pass
+            self._save_images_last_read = now
+        return self._save_images
+
     def _enqueue_save(
         self, pixels_bytes: bytes, path: Path, label: str = "frame"
     ) -> None:
@@ -74,12 +91,13 @@ class LoggerNode(Node):
             self.logger.warning(f"Image save queue full — dropping {label}")
 
     def _handle_image(self):
-        sample = self.image_port.subscriber.receive()
-        if sample is not None:
-            save_images = self.blackboard_read(self.blackboard_reader, "save_images")
-            if save_images:
+        # Drain all queued samples to prevent notification pile-up
+        while True:
+            sample = self.image_port.subscriber.receive()
+            if sample is None:
+                break
+            if self._get_save_images():
                 data = sample.payload()
-                # Copy pixels out of shared memory before releasing the sample
                 pixels_bytes = bytes(data.contents.pixels)
                 image_name = f"{data.contents.timestamp}.png"
                 del data
@@ -87,8 +105,11 @@ class LoggerNode(Node):
             del sample
 
     def _handle_telemetry(self):
-        sample = self.telemetry_port.subscriber.receive()
-        if sample is not None:
+        # Drain all queued samples to prevent notification pile-up
+        while True:
+            sample = self.telemetry_port.subscriber.receive()
+            if sample is None:
+                break
             data = sample.payload()
             self.logger.debug(f"Received Telemetry: {data.contents}")
             try:
@@ -104,8 +125,11 @@ class LoggerNode(Node):
             self.database.log(telemetry_sample)
 
     def _handle_action(self):
-        sample = self.action_port.subscriber.receive()
-        if sample is not None:
+        # Drain all queued samples to prevent notification pile-up
+        while True:
+            sample = self.action_port.subscriber.receive()
+            if sample is None:
+                break
             data = sample.payload()
             self.logger.debug(f"Received Action: {data.contents}")
             c = data.contents
@@ -128,8 +152,11 @@ class LoggerNode(Node):
             self.database.log(action_sample)
 
     def _handle_perception(self):
-        sample = self.perception_port.subscriber.receive()
-        if sample is not None:
+        # Drain all queued samples to prevent notification pile-up
+        while True:
+            sample = self.perception_port.subscriber.receive()
+            if sample is None:
+                break
             data = sample.payload()
             self.logger.debug(f"Received Perception: {data.contents}")
 
@@ -150,8 +177,7 @@ class LoggerNode(Node):
                 gesture_confidence=data.contents.gesture_confidence,
             )
 
-            save_images = self.blackboard_read(self.blackboard_reader, "save_images")
-            if save_images:
+            if self._get_save_images():
                 processed_bytes = bytes(data.contents.processed_pixels)
                 proc_name = f"{data.contents.timestamp}.png"
                 self._enqueue_save(
@@ -193,42 +219,38 @@ class LoggerNode(Node):
         IMAGES_PATH.mkdir(parents=True, exist_ok=True)
         PROCESSED_IMAGES_PATH.mkdir(parents=True, exist_ok=True)
 
-        # 2. Setup WaitSet
-        # We use WaitSet to multiplex between multiple listeners in a single thread.
-        waitset = iceoryx2.WaitSetBuilder.new().create(iceoryx2.ServiceType.Ipc)
-
-        # Attach listeners. The guards must stay in scope to remain attached.
-        image_guard = waitset.attach_notification(self.image_port.listener)
-        telemetry_guard = waitset.attach_notification(self.telemetry_port.listener)
-        action_guard = waitset.attach_notification(self.action_port.listener)
-        perception_guard = waitset.attach_notification(self.perception_port.listener)
-
-        self.logger.info("WaitSet initialized, listening for events...")
+        # TODO: Replace timed_wait_one workaround with WaitSet once the
+        # iceoryx2 spinning bug is fixed (see GitHub issue in thesis/Iceoryx2.md).
+        # Intended WaitSet code (4 attachments — image, telemetry, action, perception):
+        #
+        #   waitset = iceoryx2.WaitSetBuilder.new().create(iceoryx2.ServiceType.Ipc)
+        #   image_guard     = waitset.attach_notification(self.image_port.listener)
+        #   telemetry_guard = waitset.attach_notification(self.telemetry_port.listener)
+        #   action_guard    = waitset.attach_notification(self.action_port.listener)
+        #   perception_guard= waitset.attach_notification(self.perception_port.listener)
+        #   while self.running:
+        #       ids, result = waitset.wait_and_process_with_timeout(Duration.from_millis(100))
+        #       for event_id in ids:
+        #           if event_id.has_event_from(image_guard): self._handle_image()
+        #           elif event_id.has_event_from(telemetry_guard): self._handle_telemetry()
+        #           elif event_id.has_event_from(action_guard): self._handle_action()
+        #           elif event_id.has_event_from(perception_guard): self._handle_perception()
+        #   finally: [all guards].delete(); waitset.delete()
+        self.logger.info("Polling loop initialized, listening for events...")
 
         try:
             while self.running:
-                # 3. Wait for events (blocks until an event arrives or timeout)
-                ids, result = waitset.wait_and_process_with_timeout(
+                # Block up to 100ms waiting for an image event (highest-frequency)
+                event_id = self.image_port.listener.timed_wait_one(
                     iceoryx2.Duration.from_millis(100)
                 )
+                if event_id == self.image_port.event:
+                    self._handle_image()
 
-                # Check if we were interrupted by a signal
-                if result in (
-                    iceoryx2.WaitSetRunResult.Interrupt,
-                    iceoryx2.WaitSetRunResult.TerminationRequest,
-                ):
-                    self.running = False
-                    break
-
-                for event_id in ids:
-                    if event_id.has_event_from(image_guard):
-                        self._handle_image()
-                    elif event_id.has_event_from(telemetry_guard):
-                        self._handle_telemetry()
-                    elif event_id.has_event_from(action_guard):
-                        self._handle_action()
-                    elif event_id.has_event_from(perception_guard):
-                        self._handle_perception()
+                # Non-blocking drain of remaining subscribers each iteration
+                self._handle_telemetry()
+                self._handle_action()
+                self._handle_perception()
 
         except (
             iceoryx2.NodeWaitFailure,
@@ -239,11 +261,6 @@ class LoggerNode(Node):
         except Exception as e:
             self.logger.error(f"LoggerNode error: {e}", exc_info=True)
         finally:
-            image_guard.delete()
-            telemetry_guard.delete()
-            action_guard.delete()
-            perception_guard.delete()
-            waitset.delete()
             self._save_queue.put(None)  # signal save worker to stop
             self._save_thread.join(timeout=5)
             self.database.close()
