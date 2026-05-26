@@ -15,6 +15,7 @@ class ActionData(ctypes.Structure):
         ("zdistance", ctypes.c_float),
         ("ema_x", ctypes.c_float),  # EMA-filtered hand x (0.0 when not tracking)
         ("ema_y", ctypes.c_float),  # EMA-filtered hand y (0.0 when not tracking)
+        ("thrust", ctypes.c_uint16),  # raw thrust for MOTOR_TEST (0–65535; 0 otherwise)
     ]
 
     def __str__(self) -> str:

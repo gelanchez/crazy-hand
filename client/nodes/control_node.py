@@ -14,6 +14,8 @@ from client.common.constants import (
     LAND_RATE,
     MAX_ALTITUDE,
     MIN_ALTITUDE,
+    MOTOR_TEST_DURATION,
+    MOTOR_TEST_THRUST,
     SPEED_FACTOR,
     TRACKING_ALT_SCALE,
     TRACKING_DEADZONE_PX,
@@ -57,6 +59,10 @@ class ControlNode(Node):
 
         # Source of the last landing command (for action logging)
         self._landing_source: ActionSource = ActionSource.KEYBOARD
+
+        # Motor test state
+        self._motor_test_end: float = 0.0
+        self._thrust: int = 0
 
     def _update_ema(self, x: int, y: int) -> tuple[float, float]:
         """Apply EMA smoothing to raw hand position. Returns filtered (x, y)."""
@@ -170,11 +176,27 @@ class ControlNode(Node):
             self.logger.info("Landing complete — cutting motors")
         self._publish_action(self._landing_source)
 
+    def _tick_motor_test(self):
+        if time.monotonic() >= self._motor_test_end:
+            # Test done — one final publish to push state=IDLE back to wifi_node
+            self._motor_test_end = 0.0
+            self._thrust = 0
+            self._state = FlightState.IDLE
+            self._flight_command = FlightCommand.NONE
+            self._publish_action()
+            self.logger.info("Motor test complete")
+        # else: still active — wifi_node spins motors based on flight_state=MOTOR_TESTING;
+        # no repeated notifications needed (avoids flooding iceoryx2 listener queue)
+
     def _publish_action(self, source: ActionSource = ActionSource.KEYBOARD):
         try:
             sample = self.action_port.publisher.loan_uninit()
             p = sample.payload().contents
-            p.active = self._state != FlightState.IDLE
+            p.active = self._state in (
+                FlightState.AIRBORNE,
+                FlightState.TRACKING,
+                FlightState.LANDING,
+            )
             p.command = int(self._flight_command)
             p.state = int(self._state)
             p.source = int(source)
@@ -186,6 +208,7 @@ class ControlNode(Node):
             )
             p.ema_x = self._ema_x if self._ema_x is not None else 0.0
             p.ema_y = self._ema_y if self._ema_y is not None else 0.0
+            p.thrust = self._thrust
             cmd_name = self._flight_command.name
             sample.assume_init().send()
             self._flight_command = (
@@ -320,6 +343,15 @@ class ControlNode(Node):
                     self.logger.info("Stabilised")
                     changed = True
 
+                # --- Motor test (ground only) ---
+                case (True, KeyCode.M) if self._state == FlightState.IDLE:
+                    self._state = FlightState.MOTOR_TESTING
+                    self._motor_test_end = time.monotonic() + MOTOR_TEST_DURATION
+                    self._thrust = MOTOR_TEST_THRUST
+                    self._flight_command = FlightCommand.MOTOR_TEST
+                    self.logger.info("MOTOR TEST commanded")
+                    changed = True
+
                 # --- Zero on release ---
                 case (False, KeyCode.UP | KeyCode.DOWN):
                     self._hover["vx"] = 0.0
@@ -389,6 +421,8 @@ class ControlNode(Node):
 
                 if self._state == FlightState.LANDING:
                     self._tick_landing()
+                elif self._state == FlightState.MOTOR_TESTING:
+                    self._tick_motor_test()
 
         except (
             iceoryx2.NodeWaitFailure,

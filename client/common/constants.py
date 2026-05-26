@@ -52,6 +52,7 @@ class FlightState(IntEnum):
     AIRBORNE = auto()
     TRACKING = auto()
     LANDING = auto()
+    MOTOR_TESTING = auto()
 
 
 @unique
@@ -61,6 +62,7 @@ class FlightCommand(IntEnum):
     LAND = auto()
     EMERGENCY_STOP = auto()
     TOGGLE_TRACKING = auto()
+    MOTOR_TEST = auto()
 
 
 @unique
@@ -81,6 +83,10 @@ YAW_RATE_FAST = 200.0  # deg/s Shift yaw
 LAND_RATE = 0.2  # m/s controlled descent rate
 LAND_CUTOFF = 0.05  # m — cut motors below this height
 MAX_ALTITUDE = 2.0  # m ceiling for manual altitude control
+MOTOR_TEST_THRUST = (
+    12000  # raw thrust for ground motor test (20% — spins visibly, won't lift)
+)
+MOTOR_TEST_DURATION = 0.5  # seconds to run motor test
 MIN_ALTITUDE = 0.1  # m floor for manual altitude control
 
 # Vision / gesture recognition
@@ -116,3 +122,4 @@ class KeyCode(IntEnum):
     D = auto()
     T = auto()
     C = auto()
+    M = auto()

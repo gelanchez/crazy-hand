@@ -25,6 +25,7 @@ from client.common.constants import (
     AppStatus,
     EventId,
     FlightCommand,
+    FlightState,
     ServiceName,
 )
 from client.common.node import Node
@@ -379,6 +380,8 @@ class WifiNode(Node):
             0  # countdown: sends thrust=0 packets before first hover setpoint (~500 ms)
         )
         hover = [0.0, 0.0, 0.0, DEFAULT_HEIGHT]  # vx, vy, yawrate, zdist
+        flight_state = FlightState.IDLE
+        motor_test_thrust = 0
 
         while self.running:
             try:
@@ -397,13 +400,15 @@ class WifiNode(Node):
                     sample = None
 
                 if sample is not None:
-                    act = sample.payload().contents
-                    command = FlightCommand(act.command)
-                    hover[0] = act.vx
-                    hover[1] = act.vy
-                    hover[2] = act.yawrate
-                    hover[3] = act.zdistance
-                    del act, sample
+                    action = sample.payload().contents
+                    command = FlightCommand(action.command)
+                    flight_state = FlightState(action.state)
+                    hover[0] = action.vx
+                    hover[1] = action.vy
+                    hover[2] = action.yawrate
+                    hover[3] = action.zdistance
+                    motor_test_thrust = action.thrust
+                    del action, sample
 
                     match command:
                         case FlightCommand.TAKEOFF:
@@ -430,7 +435,11 @@ class WifiNode(Node):
                                 self.logger.error(f"Emergency stop error: {e}")
                             flying = False
                             unlocking = 0
+                            flight_state = FlightState.IDLE
                             hover[0] = hover[1] = hover[2] = 0.0
+
+                        case FlightCommand.MOTOR_TEST:
+                            self.logger.info("Motor test — spinning motors")
 
             if self._reconnecting:
                 # Link is dead — skip all sends to avoid Broken pipe spam
@@ -449,6 +458,12 @@ class WifiNode(Node):
                         self.cf.commander.send_hover_setpoint(*hover)
                     except Exception as e:
                         self.logger.warning(f"Hover send error: {e}")
+            elif flight_state == FlightState.MOTOR_TESTING:
+                # Motor test: spin at low thrust — visible but won't lift
+                try:
+                    self.cf.commander.send_setpoint(0, 0, 0, motor_test_thrust)
+                except Exception as e:
+                    self.logger.warning(f"Motor test send error: {e}")
             else:
                 # Keep commander alive while grounded — prevents EKF drift between flights
                 try:

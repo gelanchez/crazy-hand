@@ -52,6 +52,7 @@ _SHORTCUTS = {
     "Esc": "Emergency stop",
     "T": "Toggle tracking mode",
     "C": "Stabilise (stop movement, hold altitude)",
+    "M": "Motor test — spin motors briefly (ground only)",
     "↑ / ↓": "Forward / Backward",
     "← / →": "Strafe left / right",
     "Shift+↑↓←→": "Fast forward / backward / strafe",
@@ -487,6 +488,8 @@ class MainWindow(QMainWindow):
                 self._publish_command(KeyCode.T, True)
             case Qt.Key.Key_C:
                 self._publish_command(KeyCode.C, True, shift)
+            case Qt.Key.Key_M:
+                self._publish_command(KeyCode.M, True)
 
         super().keyPressEvent(event)
 
@@ -520,6 +523,8 @@ class MainWindow(QMainWindow):
                 self._publish_command(KeyCode.T, False)
             case Qt.Key.Key_C:
                 self._publish_command(KeyCode.C, False)
+            case Qt.Key.Key_M:
+                self._publish_command(KeyCode.M, False)
 
         super().keyReleaseEvent(event)
 
