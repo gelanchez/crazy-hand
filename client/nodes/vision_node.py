@@ -49,7 +49,7 @@ class VisionNode(Node):
 
         options = vision.GestureRecognizerOptions(
             base_options=base_options,
-            running_mode=vision.RunningMode.IMAGE,
+            running_mode=vision.RunningMode.VIDEO,
             num_hands=1,
             min_hand_detection_confidence=GESTURE_MIN_CONFIDENCE,
             min_hand_presence_confidence=GESTURE_MIN_CONFIDENCE,
@@ -57,6 +57,7 @@ class VisionNode(Node):
         )
 
         self.recognizer = vision.GestureRecognizer.create_from_options(options)
+        self._last_timestamp_ms: int = -1  # guard for VIDEO mode monotonic requirement
 
         # =========================================================
         # GESTURE FILTERING PARAMETERS
@@ -179,7 +180,7 @@ class VisionNode(Node):
                         np.ctypeslib.as_array(raw_ptr),
                         dtype=np.uint8,
                         count=IMAGE_SIZE,
-                    ).copy()
+                    ).reshape(IMAGE_HEIGHT, IMAGE_WIDTH).copy()
 
                 finally:
                     del sample
@@ -187,8 +188,8 @@ class VisionNode(Node):
                 # ======================================================
                 # IMAGE PREP
                 # ======================================================
-                pixels = pixels.reshape((IMAGE_HEIGHT, IMAGE_WIDTH))
-                pixels = np.ascontiguousarray(np.stack((pixels,) * 3, axis=-1))
+                # cv2.COLOR_GRAY2RGB: single C++ call, output already contiguous
+                pixels = cv2.cvtColor(pixels, cv2.COLOR_GRAY2RGB)
 
                 mp_image = mp.Image(
                     image_format=mp.ImageFormat.SRGB,
@@ -198,7 +199,15 @@ class VisionNode(Node):
                 # ======================================================
                 # INFERENCE
                 # ======================================================
-                results = self.recognizer.recognize(mp_image)
+                # VIDEO mode: guard against non-monotonic timestamps
+                if img_timestamp <= self._last_timestamp_ms:
+                    self.logger.debug(
+                        f"Non-monotonic timestamp {img_timestamp} <= "
+                        f"{self._last_timestamp_ms}, skipping frame"
+                    )
+                    continue
+                self._last_timestamp_ms = img_timestamp
+                results = self.recognizer.recognize_for_video(mp_image, img_timestamp)
 
                 # ======================================================
                 # HAND CHECK
@@ -207,11 +216,8 @@ class VisionNode(Node):
                 if results.hand_landmarks:
                     landmarks = results.hand_landmarks[0]
 
-                    xs = [lm.x for lm in landmarks]
-                    ys = [lm.y for lm in landmarks]
-
-                    cx = sum(xs) / len(xs)
-                    cy = sum(ys) / len(ys)
+                    coords = np.array([(lm.x, lm.y) for lm in landmarks])
+                    cx, cy = coords.mean(axis=0)
 
                     pixel_x = int(cx * IMAGE_WIDTH)
                     pixel_y = int(cy * IMAGE_HEIGHT)
