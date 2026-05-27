@@ -16,10 +16,11 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QMainWindow,
-    QMessageBox,
+    QProgressBar,
     QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
@@ -72,6 +73,47 @@ APP_STATUS_TEXT = {
     AppStatus.SIMULATING: "Simulating",
 }
 
+# FPS colour thresholds — tune per codec (PNG ≈ 9 fps, JPG faster)
+_FPS_GREEN = 7
+_FPS_ORANGE = 3
+
+
+def _battery_color(vbat: float) -> str:
+    """Interpolate red(3.0V) → orange(3.7V) → green(4.2V)."""
+    if vbat >= 3.7:
+        t = min(1.0, (vbat - 3.7) / (4.2 - 3.7))
+        r, g, b = (
+            round(251 + (74 - 251) * t),
+            round(146 + (222 - 146) * t),
+            round(60 + (128 - 60) * t),
+        )
+    else:
+        t = max(0.0, (vbat - 3.0) / (3.7 - 3.0))
+        r, g, b = (
+            round(239 + (251 - 239) * t),
+            round(68 + (146 - 68) * t),
+            round(68 + (60 - 68) * t),
+        )
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+# Maps Qt key → (KeyCode, uses_shift). Second element False = shift never forwarded.
+_KEY_MAP: dict = {
+    Qt.Key.Key_Space: (KeyCode.SPACE, False),
+    Qt.Key.Key_Escape: (KeyCode.ESC, False),
+    Qt.Key.Key_Up: (KeyCode.UP, True),
+    Qt.Key.Key_Down: (KeyCode.DOWN, True),
+    Qt.Key.Key_Left: (KeyCode.LEFT, True),
+    Qt.Key.Key_Right: (KeyCode.RIGHT, True),
+    Qt.Key.Key_W: (KeyCode.W, True),
+    Qt.Key.Key_A: (KeyCode.A, True),
+    Qt.Key.Key_S: (KeyCode.S, True),
+    Qt.Key.Key_D: (KeyCode.D, True),
+    Qt.Key.Key_T: (KeyCode.T, False),
+    Qt.Key.Key_C: (KeyCode.C, True),
+    Qt.Key.Key_M: (KeyCode.M, False),
+}
+
 
 class ImageReceiverThreadNode(Node, QThread):
     status_changed = Signal(str)
@@ -82,9 +124,78 @@ class ImageReceiverThreadNode(Node, QThread):
         QThread.__init__(self, parent)
         Node.__init__(self, NODE_NAME, level=logging.DEBUG, handle_signals=False)
 
+    def _drain_images(self, process_images: bool) -> None:
+        latest = None
+        while True:
+            s = self.image_port.subscriber.receive()
+            if s is None:
+                break
+            if latest is not None:
+                del latest
+            latest = s
+        if latest is not None and not process_images:
+            data = latest.payload()
+            pixels = np.ctypeslib.as_array(data.contents.pixels).copy()
+            del data, latest
+            self.image_received.emit(pixels)
+        elif latest is not None:
+            del latest
+
+    def _drain_perception(self, process_images: bool) -> None:
+        if self.perception_port is None or self.perception_port.subscriber is None:
+            return
+        while True:
+            sample = self.perception_port.subscriber.receive()
+            if sample is None:
+                break
+            if process_images:
+                data = sample.payload()
+                pixels = np.ctypeslib.as_array(data.contents.processed_pixels).copy()
+                del data, sample
+                self.image_received.emit(pixels)
+            else:
+                del sample
+
+    def _drain_telemetry(self) -> None:
+        while True:
+            sample = self.telemetry_port.subscriber.receive()
+            if sample is None:
+                break
+            data = sample.payload()
+            c = data.contents
+            try:
+                status_val = AppStatus(c.status)
+            except ValueError:
+                status_val = AppStatus.DISCONNECTED
+            fps = c.fps
+            tele_data = {
+                "status": status_val,
+                "fps": fps,
+                "x": c.x,
+                "y": c.y,
+                "z": c.z,
+                "vx": c.vx,
+                "vy": c.vy,
+                "vz": c.vz,
+                "roll": c.roll,
+                "pitch": c.pitch,
+                "yaw": c.yaw,
+                "m1": c.m1,
+                "m2": c.m2,
+                "m3": c.m3,
+                "m4": c.m4,
+                "vbat": c.vbat,
+            }
+            del c, data, sample
+            status_text = APP_STATUS_TEXT.get(status_val, "Unknown State")
+            if fps > 0:
+                status_text = f"{status_text} — {fps:.1f} fps"
+            self.status_changed.emit(status_text)
+            self.telemetry_updated.emit(tele_data)
+
     def run(self):
         self.logger.info(f"{NODE_NAME} running")
-        self.status_changed.emit("Waiting for services...")
+        self.status_changed.emit("Initializing...")
 
         self.image_port = self.create_subscriber(
             ServiceName.IMAGE,
@@ -135,11 +246,6 @@ class ImageReceiverThreadNode(Node, QThread):
         #               sample = perception_port.subscriber.receive(); ...emit processed pixels
         #   finally: [all guards].delete(); waitset.delete()
 
-        has_perception = (
-            self.perception_port is not None
-            and self.perception_port.subscriber is not None
-        )
-
         try:
             while not self.isInterruptionRequested() and self.running:
                 # Sleep-based polling — avoids WaitSet spinning bug AND any
@@ -149,71 +255,13 @@ class ImageReceiverThreadNode(Node, QThread):
                 # Yield GIL so Qt main thread can process key/mouse events.
                 time.sleep(0)
 
-                process_images = (
-                    local_blackboard_reader is not None
-                    and self.blackboard_read(local_blackboard_reader, "process_images")
+                process_images = local_blackboard_reader is not None and self.blackboard_read(
+                    local_blackboard_reader, "process_images"
                 )
 
-                # Drain image subscriber — display the latest raw frame
-                latest = None
-                while True:
-                    s = self.image_port.subscriber.receive()
-                    if s is None:
-                        break
-                    if latest is not None:
-                        del latest
-                    latest = s
-                if latest is not None and not process_images:
-                    data = latest.payload()
-                    pixels = np.ctypeslib.as_array(data.contents.pixels).copy()
-                    del data, latest
-                    self.image_received.emit(pixels)
-                elif latest is not None:
-                    del latest
-
-                # Drain perception subscriber — display latest processed frame
-                if has_perception:
-                    while True:
-                        sample = self.perception_port.subscriber.receive()
-                        if sample is None:
-                            break
-                        if process_images:
-                            data = sample.payload()
-                            pixels = np.ctypeslib.as_array(
-                                data.contents.processed_pixels
-                            ).copy()
-                            del data, sample
-                            self.image_received.emit(pixels)
-                        else:
-                            del sample
-
-                # Drain telemetry subscriber — update status bar and sidebar
-                while True:
-                    sample = self.telemetry_port.subscriber.receive()
-                    if sample is None:
-                        break
-                    data = sample.payload()
-                    c = data.contents
-                    try:
-                        status_val = AppStatus(c.status)
-                    except ValueError:
-                        status_val = AppStatus.DISCONNECTED
-                    fps = c.fps
-                    tele_data = {
-                        "status": status_val,
-                        "fps": fps,
-                        "x": c.x, "y": c.y, "z": c.z,
-                        "vx": c.vx, "vy": c.vy, "vz": c.vz,
-                        "roll": c.roll, "pitch": c.pitch, "yaw": c.yaw,
-                        "m1": c.m1, "m2": c.m2, "m3": c.m3, "m4": c.m4,
-                        "vbat": c.vbat,
-                    }
-                    del c, data, sample
-                    status_text = APP_STATUS_TEXT.get(status_val, "Unknown State")
-                    if fps > 0:
-                        status_text = f"{status_text} — {fps:.1f} fps"
-                    self.status_changed.emit(status_text)
-                    self.telemetry_updated.emit(tele_data)
+                self._drain_images(process_images)
+                self._drain_perception(process_images)
+                self._drain_telemetry()
 
         except (
             iceoryx2.NodeWaitFailure,
@@ -253,7 +301,7 @@ class ShortcutsDialog(QDialog):
 
 
 class MainWindow(QMainWindow):
-    PANEL_WIDTH = 300
+    PANEL_WIDTH = 185
     WINDOW_WIDTH = IMAGE_WIDTH * IMAGE_SCALING_FACTOR + PANEL_WIDTH
     WINDOW_HEIGHT = IMAGE_HEIGHT * IMAGE_SCALING_FACTOR
 
@@ -267,25 +315,17 @@ class MainWindow(QMainWindow):
         self.resize(MainWindow.WINDOW_WIDTH, MainWindow.WINDOW_HEIGHT)
 
         # Command Node (Main Thread): Publishes commands instantly on UI events
-        self.command_node = Node(
-            "gui_command", level=logging.DEBUG, handle_signals=False
-        )
+        self.command_node = Node("gui_command", level=logging.DEBUG, handle_signals=False)
 
         # Receiver Thread (Background): Blocks while waiting for high-frequency images
         self.image_receiver = ImageReceiverThreadNode()
 
         # Writer first, then reader
-        self.blackboard_writer = self.image_receiver.create_blackboard_writer(
-            "/config", CONFIG
-        )
-        self.blackboard_reader = self.image_receiver.create_blackboard_reader(
-            "/config", CONFIG
-        )
+        self.blackboard_writer = self.image_receiver.create_blackboard_writer("/config", CONFIG)
+        self.blackboard_reader = self.image_receiver.create_blackboard_reader("/config", CONFIG)
 
         # Command publisher setup
-        self.command_port = self.command_node.create_publisher(
-            ServiceName.COMMAND, CommandData, EventId.COMMAND_READY
-        )
+        self.command_port = self.command_node.create_publisher(ServiceName.COMMAND, CommandData, EventId.COMMAND_READY)
 
         self.image_receiver.status_changed.connect(self._on_status_changed)
         self.image_receiver.image_received.connect(self.update_image)
@@ -311,24 +351,22 @@ class MainWindow(QMainWindow):
 
         settings_menu = menu_bar.addMenu("Settings")
 
-        process_images_enabled = self.image_receiver.blackboard_read(
-            self.blackboard_reader, "process_images"
-        )
+        process_images_enabled = self.image_receiver.blackboard_read(self.blackboard_reader, "process_images")
         self.process_images_action = QAction("Process images", self)
         self.process_images_action.setCheckable(True)
         self.process_images_action.setShortcut("Ctrl+P")
         self.process_images_action.setChecked(process_images_enabled)
-        self.process_images_action.toggled.connect(self._on_process_images_toggled)
+        self.process_images_action.toggled.connect(
+            lambda checked: self._on_toggle_blackboard("process_images", checked)
+        )
         settings_menu.addAction(self.process_images_action)
 
-        save_images_enabled = self.image_receiver.blackboard_read(
-            self.blackboard_reader, "save_images"
-        )
+        save_images_enabled = self.image_receiver.blackboard_read(self.blackboard_reader, "save_images")
         self.save_images_action = QAction("Save images", self)
         self.save_images_action.setCheckable(True)
         self.save_images_action.setShortcut("Ctrl+S")
         self.save_images_action.setChecked(save_images_enabled)
-        self.save_images_action.toggled.connect(self._on_save_images_toggled)
+        self.save_images_action.toggled.connect(lambda checked: self._on_toggle_blackboard("save_images", checked))
         settings_menu.addAction(self.save_images_action)
 
         help_menu = menu_bar.addMenu("Help")
@@ -352,18 +390,24 @@ class MainWindow(QMainWindow):
         video_layout = QVBoxLayout(video_panel)
         video_layout.setContentsMargins(0, 0, 0, 0)
         video_layout.setSpacing(0)
-        self.video_label = QLabel("Waiting for video stream...")
+        self.video_label = QLabel("📷  Waiting for video stream...")
         self.video_label.setAlignment(Qt.AlignCenter)
-        self.video_label.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
-        )
+        self.video_label.setStyleSheet("color: #666; font-size: 13px;")
+        self.video_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         video_layout.addWidget(self.video_label)
         main_layout.addWidget(video_panel, 1)
+        main_layout.addWidget(self._setup_sidebar())
 
-        # --- Telemetry sidebar ---
+        hints = QLabel("Space: Take off/Land  Esc: Emergency  ↑↓←→: Move  A/D: Yaw  W/S: Alt  T: Tracking")
+        hints.setStyleSheet("color: #777; font-size: 9px; padding-right: 6px;")
+        self.statusBar().addPermanentWidget(hints)
+
+    def _setup_sidebar(self) -> QFrame:
         tele_panel = QFrame()
+        tele_panel.setObjectName("tele_panel")
         tele_panel.setFixedWidth(MainWindow.PANEL_WIDTH)
-        tele_panel.setFrameShape(QFrame.Shape.StyledPanel)
+        tele_panel.setFrameShape(QFrame.Shape.NoFrame)
+        tele_panel.setStyleSheet("#tele_panel { border-left: 1px solid #444; }")
         tele_layout = QVBoxLayout(tele_panel)
         tele_layout.setContentsMargins(10, 10, 10, 10)
         tele_layout.setSpacing(2)
@@ -373,13 +417,9 @@ class MainWindow(QMainWindow):
         val_font.setStyleHint(QFont.StyleHint.Monospace)
 
         def _add_section(header: str):
-            sep = QFrame()
-            sep.setFrameShape(QFrame.Shape.HLine)
-            sep.setFrameShadow(QFrame.Shadow.Sunken)
-            tele_layout.addWidget(sep)
             h = QLabel(header)
             h.setFont(QFont("Outfit", 9, QFont.Weight.Bold))
-            h.setStyleSheet("color: #888;")
+            h.setStyleSheet("color: #999; padding-top: 5px; border-top: 1px solid #444;")
             tele_layout.addWidget(h)
 
         def _add_row(label: str, key: str):
@@ -388,18 +428,16 @@ class MainWindow(QMainWindow):
             row_layout.setContentsMargins(4, 1, 4, 1)
             lbl = QLabel(label)
             lbl.setFont(val_font)
+            lbl.setStyleSheet("color: #aaa;")
             val = QLabel("—")
             val.setFont(val_font)
-            val.setAlignment(
-                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-            )
+            val.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             row_layout.addWidget(lbl)
             row_layout.addStretch()
             row_layout.addWidget(val)
             tele_layout.addWidget(row_widget)
             self._tele_labels[key] = val
 
-        _add_section("STATUS")
         _add_row("Status", "status")
         _add_row("FPS", "fps")
 
@@ -418,17 +456,45 @@ class MainWindow(QMainWindow):
         _add_row("Pitch", "pitch")
         _add_row("Yaw", "yaw")
 
-        _add_section("MOTORS (PWM)")
-        _add_row("M1", "m1")
-        _add_row("M2", "m2")
-        _add_row("M3", "m3")
-        _add_row("M4", "m4")
+        _add_section("MOTORS (%)")
+        motor_widget = QWidget()
+        motor_grid = QGridLayout(motor_widget)
+        motor_grid.setContentsMargins(4, 1, 4, 1)
+        motor_grid.setVerticalSpacing(2)
+        motor_grid.setHorizontalSpacing(8)
+        motor_grid.setColumnStretch(2, 1)
+        for i, key in enumerate(("m1", "m2", "m3", "m4")):
+            row, col = divmod(i, 2)
+            grid_col = col * 3
+            mlbl = QLabel(f"M{i + 1}")
+            mlbl.setFont(val_font)
+            mlbl.setStyleSheet("color: #aaa;")
+            mval = QLabel("—")
+            mval.setFont(val_font)
+            mval.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            motor_grid.addWidget(mlbl, row, grid_col)
+            motor_grid.addWidget(mval, row, grid_col + 1)
+            self._tele_labels[key] = mval
+        tele_layout.addWidget(motor_widget)
 
         _add_section("BATTERY")
+        self._battery_bar = QProgressBar()
+        self._battery_bar.setRange(0, 100)
+        self._battery_bar.setValue(0)
+        self._battery_bar.setFixedHeight(6)
+        self._battery_bar.setTextVisible(False)
+        self._battery_bar.setContentsMargins(4, 2, 4, 2)
+        self._battery_bar.setStyleSheet("""
+            QProgressBar {
+                border: 1px solid #666; border-radius: 2px; background: #1e1e1e;
+            }
+            QProgressBar::chunk { background: #4ade80; border-radius: 1px; }
+        """)
+        tele_layout.addWidget(self._battery_bar)
         _add_row("VBat", "vbat")
 
         tele_layout.addStretch()
-        main_layout.addWidget(tele_panel)
+        return tele_panel
 
     def _publish_command(self, key: KeyCode, is_pressed: bool, shift: bool = False):
         if self.command_port is None:
@@ -441,18 +507,20 @@ class MainWindow(QMainWindow):
             p.is_pressed = is_pressed
             p.shift = shift
             sample.assume_init().send()
-            self.command_port.notifier.notify_with_custom_event_id(
-                self.command_port.event
-            )
+            self.command_port.notifier.notify_with_custom_event_id(self.command_port.event)
         except Exception as e:
             logger.warning(f"Command publish failed: {e}")
 
     @Slot(str)
     def _on_status_changed(self, text: str):
         self.statusBar().showMessage(text)
+        for _, name in APP_STATUS_TEXT.items():
+            if text.startswith(name):
+                self.setWindowTitle(f"Crazyflie GS — {name}")
+                break
         if text.startswith(APP_STATUS_TEXT[AppStatus.DISCONNECTED]):
             self.video_label.clear()
-            self.video_label.setText("Waiting for video stream...")
+            self.video_label.setText("📷  Waiting for video stream...")
 
     @Slot(dict)
     def _on_telemetry_updated(self, data: dict):
@@ -461,26 +529,81 @@ class MainWindow(QMainWindow):
             if lbl:
                 lbl.setText(text)
 
+        def _color(key: str, color: str):
+            lbl = self._tele_labels.get(key)
+            if lbl:
+                lbl.setStyleSheet(f"color: {color};" if color else "")
+
         status_val = data.get("status", AppStatus.DISCONNECTED)
         _set("status", APP_STATUS_TEXT.get(status_val, "—"))
+        _color(
+            "status",
+            {
+                AppStatus.CONNECTED: "#4ade80",
+                AppStatus.SIMULATING: "#fb923c",
+                AppStatus.DISCONNECTED: "#f87171",
+            }.get(status_val, "#888"),
+        )
+
+        live = status_val != AppStatus.DISCONNECTED
 
         fps = data.get("fps", 0.0)
         _set("fps", f"{fps:.1f}" if fps > 0 else "—")
+        if fps > 0:
+            _color(
+                "fps",
+                "#4ade80" if fps >= _FPS_GREEN else "#fb923c" if fps >= _FPS_ORANGE else "#ef4444",
+            )
+        else:
+            _color("fps", "")
 
-        _set("x",     f"{data.get('x',     0.0):+.2f}")
-        _set("y",     f"{data.get('y',     0.0):+.2f}")
-        _set("z",     f"{data.get('z',     0.0):+.2f}")
-        _set("vx",    f"{data.get('vx',    0.0):+.2f}")
-        _set("vy",    f"{data.get('vy',    0.0):+.2f}")
-        _set("vz",    f"{data.get('vz',    0.0):+.2f}")
-        _set("roll",  f"{data.get('roll',  0.0):+.1f}°")
-        _set("pitch", f"{data.get('pitch', 0.0):+.1f}°")
-        _set("yaw",   f"{data.get('yaw',   0.0):+.1f}°")
-        _set("m1",    str(data.get("m1", 0)))
-        _set("m2",    str(data.get("m2", 0)))
-        _set("m3",    str(data.get("m3", 0)))
-        _set("m4",    str(data.get("m4", 0)))
-        _set("vbat",  f"{data.get('vbat', 0.0):.2f} V")
+        if live:
+            _set("x", f"{data.get('x', 0.0):+.2f}")
+            _set("y", f"{data.get('y', 0.0):+.2f}")
+            _set("z", f"{data.get('z', 0.0):+.2f}")
+            _set("vx", f"{data.get('vx', 0.0):+.2f}")
+            _set("vy", f"{data.get('vy', 0.0):+.2f}")
+            _set("vz", f"{data.get('vz', 0.0):+.2f}")
+            _set("roll", f"{data.get('roll', 0.0):+.1f}°")
+            _set("pitch", f"{data.get('pitch', 0.0):+.1f}°")
+            _set("yaw", f"{data.get('yaw', 0.0):+.1f}°")
+            for key in ("m1", "m2", "m3", "m4"):
+                pwm = data.get(key, 0)
+                _set(key, f"{round(pwm / 65535 * 100)}%" if pwm > 0 else "0%")
+        else:
+            for key in (
+                "x",
+                "y",
+                "z",
+                "vx",
+                "vy",
+                "vz",
+                "roll",
+                "pitch",
+                "yaw",
+                "m1",
+                "m2",
+                "m3",
+                "m4",
+            ):
+                _set(key, "—")
+
+        vbat = data.get("vbat", 0.0)
+        _set("vbat", f"{vbat:.2f} V" if vbat > 0 else "—")
+        if vbat > 0:
+            bar_color = _battery_color(vbat)
+            _color("vbat", bar_color)
+            pct = max(0, min(100, round((vbat - 3.0) / (4.2 - 3.0) * 100)))
+            self._battery_bar.setValue(pct)
+            self._battery_bar.setStyleSheet(f"""
+                QProgressBar {{
+                    border: 1px solid #666; border-radius: 2px; background: #1e1e1e;
+                }}
+                QProgressBar::chunk {{ background: {bar_color}; border-radius: 1px; }}
+            """)
+        else:
+            _color("vbat", "")
+            self._battery_bar.setValue(0)
 
     @Slot(object)
     def update_image(self, pixels: np.ndarray):
@@ -509,19 +632,9 @@ class MainWindow(QMainWindow):
         )
         self.video_label.setPixmap(pixmap)
 
-    @Slot(bool)
-    def _on_save_images_toggled(self, checked: bool):
-        self.image_receiver.blackboard_write(
-            self.blackboard_writer, "save_images", checked
-        )
-        logger.info(f"Save images set to {checked}")
-
-    @Slot(bool)
-    def _on_process_images_toggled(self, checked: bool):
-        self.image_receiver.blackboard_write(
-            self.blackboard_writer, "process_images", checked
-        )
-        logger.info(f"Process images set to {checked}")
+    def _on_toggle_blackboard(self, key: str, enabled: bool) -> None:
+        self.image_receiver.blackboard_write(self.blackboard_writer, key, enabled)
+        logger.info(f"{key} set to {enabled}")
 
     def _show_about(self):
         project = self.project_config["project"]
@@ -531,103 +644,82 @@ class MainWindow(QMainWindow):
         author = project["authors"][0]["name"]
         homepage = project["urls"]["Homepage"]
 
-        QMessageBox.about(
-            self,
-            f"About {name}",
-            f"""
-            <h2 align="center">{name}</h2>
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"About {name}")
+        dlg.setFixedWidth(460)
+        layout = QVBoxLayout(dlg)
+        layout.setSpacing(10)
+        layout.setContentsMargins(32, 28, 32, 24)
 
-            <p align="center">
-                <b>Version {version}</b>
-            </p>
+        title = QLabel(name)
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setFont(QFont("Outfit", 18, QFont.Weight.Bold))
+        layout.addWidget(title)
 
-            <p align="center">
-                {description}
-            </p>
+        ver = QLabel(f"v{version}")
+        ver.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        ver.setStyleSheet("color: #888; font-size: 11px; margin-bottom: 4px;")
+        layout.addWidget(ver)
 
-            <p align="center">
-                <a href="{homepage}">{homepage}</a>
-            </p>
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setFrameShadow(QFrame.Shadow.Sunken)
+        layout.addWidget(sep)
 
-            <hr>
+        desc = QLabel(description)
+        desc.setWordWrap(True)
+        desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        desc.setStyleSheet("font-size: 12px; padding: 10px 8px;")
+        layout.addWidget(desc)
 
-            <p align="center">
-                <small>
-                    Created by {author}
-                </small>
-            </p>
-            """,
-        )
+        stack = QLabel("Python · iceoryx2 · PySide6 · cflib · MediaPipe · OpenCV")
+        stack.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        stack.setStyleSheet("color: #888; font-size: 10px; padding-bottom: 4px;")
+        layout.addWidget(stack)
+
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.Shape.HLine)
+        sep2.setFrameShadow(QFrame.Shadow.Sunken)
+        layout.addWidget(sep2)
+
+        auth = QLabel(f"Created by {author}")
+        auth.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        auth.setStyleSheet("color: #aaa; font-size: 11px; padding-top: 4px;")
+        layout.addWidget(auth)
+
+        link = QLabel(f'<a href="{homepage}">{homepage}</a>')
+        link.setOpenExternalLinks(True)
+        link.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        link.setStyleSheet("font-size: 12px; padding-bottom: 6px;")
+        layout.addWidget(link)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(dlg.reject)
+        layout.addWidget(buttons)
+
+        dlg.adjustSize()
+        dlg.exec()
+
+    def _handle_key(self, event, is_pressed: bool) -> None:
+        entry = _KEY_MAP.get(event.key())
+        if entry is None:
+            return
+        keycode, uses_shift = entry
+        shift = is_pressed and uses_shift and bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+        self._publish_command(keycode, is_pressed, shift)
 
     def keyPressEvent(self, event):
         if event.isAutoRepeat():
             super().keyPressEvent(event)
             return
-        shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
-        key = event.key()
-        match key:
-            case Qt.Key.Key_Space:
-                self._publish_command(KeyCode.SPACE, True)
-            case Qt.Key.Key_Escape:
-                self._publish_command(KeyCode.ESC, True)
-            case Qt.Key.Key_Up:
-                self._publish_command(KeyCode.UP, True, shift)
-            case Qt.Key.Key_Down:
-                self._publish_command(KeyCode.DOWN, True, shift)
-            case Qt.Key.Key_Left:
-                self._publish_command(KeyCode.LEFT, True, shift)
-            case Qt.Key.Key_Right:
-                self._publish_command(KeyCode.RIGHT, True, shift)
-            case Qt.Key.Key_W:
-                self._publish_command(KeyCode.W, True, shift)
-            case Qt.Key.Key_A:
-                self._publish_command(KeyCode.A, True, shift)
-            case Qt.Key.Key_S:
-                self._publish_command(KeyCode.S, True, shift)
-            case Qt.Key.Key_D:
-                self._publish_command(KeyCode.D, True, shift)
-            case Qt.Key.Key_T:
-                self._publish_command(KeyCode.T, True)
-            case Qt.Key.Key_C:
-                self._publish_command(KeyCode.C, True, shift)
-            case Qt.Key.Key_M:
-                self._publish_command(KeyCode.M, True)
-
+        self._handle_key(event, True)
         super().keyPressEvent(event)
 
     def keyReleaseEvent(self, event):
         if event.isAutoRepeat():
             super().keyReleaseEvent(event)
             return
-        key = event.key()
-        match key:
-            case Qt.Key.Key_Space:
-                self._publish_command(KeyCode.SPACE, False)
-            case Qt.Key.Key_Escape:
-                self._publish_command(KeyCode.ESC, False)
-            case Qt.Key.Key_Up:
-                self._publish_command(KeyCode.UP, False)
-            case Qt.Key.Key_Down:
-                self._publish_command(KeyCode.DOWN, False)
-            case Qt.Key.Key_Left:
-                self._publish_command(KeyCode.LEFT, False)
-            case Qt.Key.Key_Right:
-                self._publish_command(KeyCode.RIGHT, False)
-            case Qt.Key.Key_W:
-                self._publish_command(KeyCode.W, False)
-            case Qt.Key.Key_A:
-                self._publish_command(KeyCode.A, False)
-            case Qt.Key.Key_S:
-                self._publish_command(KeyCode.S, False)
-            case Qt.Key.Key_D:
-                self._publish_command(KeyCode.D, False)
-            case Qt.Key.Key_T:
-                self._publish_command(KeyCode.T, False)
-            case Qt.Key.Key_C:
-                self._publish_command(KeyCode.C, False)
-            case Qt.Key.Key_M:
-                self._publish_command(KeyCode.M, False)
-
+        self._handle_key(event, False)
         super().keyReleaseEvent(event)
 
     def closeEvent(self, event):
