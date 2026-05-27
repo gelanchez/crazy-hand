@@ -34,13 +34,13 @@ class TelemetrySample:
     fps: float
     status: AppStatus
     # State estimate (Kalman filter)
-    x: float = 0.0       # position m
+    x: float = 0.0  # position m
     y: float = 0.0
     z: float = 0.0
-    vx: float = 0.0      # velocity m/s
+    vx: float = 0.0  # velocity m/s
     vy: float = 0.0
     vz: float = 0.0
-    roll: float = 0.0    # attitude deg
+    roll: float = 0.0  # attitude deg
     pitch: float = 0.0
     yaw: float = 0.0
     # Motor PWM (0–65535)
@@ -173,9 +173,7 @@ class Database:
                 elif isinstance(val, str):
                     symbols[f.name] = val
                 elif isinstance(val, bool):
-                    columns[f.name] = (
-                        val  # must precede int/float — bool is subclass of int
-                    )
+                    columns[f.name] = val  # must precede int/float — bool is subclass of int
                 else:
                     if isinstance(val, float):
                         val = round(val, self.precision)

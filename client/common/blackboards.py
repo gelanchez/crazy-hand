@@ -30,6 +30,4 @@ _ENTRIES = [
     ("process_images", blackboard_bool, {"default": False}),
 ]
 
-CONFIG = {
-    name: factory(key, **kwargs) for key, (name, factory, kwargs) in enumerate(_ENTRIES)
-}
+CONFIG = {name: factory(key, **kwargs) for key, (name, factory, kwargs) in enumerate(_ENTRIES)}

@@ -535,7 +535,6 @@ class WifiNode(Node):
 
     def _on_connected(self, uri):
         self.logger.info(f"Crazyflie connected: {uri}")
-        self._setup_log_subsystem()
         self._cf_connected.set()
 
     def _setup_log_subsystem(self) -> None:
@@ -692,7 +691,10 @@ class WifiNode(Node):
         self.cf.param.request_param_update("deck.bcAI")
 
         if not decks_event.wait(timeout=5.0):
-            self.logger.error("Required decks (AI-deck, Flow2) not detected!")
+            if not self.cf.is_connected():
+                self.logger.error("Deck check timed out — connection dropped during handshake")
+            else:
+                self.logger.error("Required decks (AI-deck, Flow2) not detected!")
             return False
 
         self.logger.info("AI-deck and Flow2 decks detected.")
@@ -870,6 +872,12 @@ class WifiNode(Node):
                             "CF failed to reconnect after link reset — exiting"
                         )
                         return
+
+                # Start log subsystem now — stable second connection is confirmed.
+                # Intentionally NOT started in _on_connected to avoid sending log
+                # traffic on the first (reset) connection, which would congest the
+                # shared TCP channel and delay the second CRTP TOC download.
+                self._setup_log_subsystem()
 
                 # Pre-register CPX APP queue immediately.  GAP8 starts streaming
                 # ~800 ms before cflib fires _on_connected; any APP packet that

@@ -41,9 +41,7 @@ class LoggerNode(Node):
         self.database = Database()
         # Background thread for non-blocking image saves
         self._save_queue: queue.Queue = queue.Queue(maxsize=10)
-        self._save_thread = threading.Thread(
-            target=self._image_save_worker, daemon=True
-        )
+        self._save_thread = threading.Thread(target=self._image_save_worker, daemon=True)
         self._save_thread.start()
         # Cached blackboard values — refreshed at most once per second
         self._save_images: bool = False
@@ -73,17 +71,13 @@ class LoggerNode(Node):
         now = time.monotonic()
         if now - self._save_images_last_read >= 1.0:
             try:
-                self._save_images = self.blackboard_read(
-                    self.blackboard_reader, "save_images"
-                )
+                self._save_images = self.blackboard_read(self.blackboard_reader, "save_images")
             except Exception:
                 pass
             self._save_images_last_read = now
         return self._save_images
 
-    def _enqueue_save(
-        self, pixels_bytes: bytes, path: Path, label: str = "frame"
-    ) -> None:
+    def _enqueue_save(self, pixels_bytes: bytes, path: Path, label: str = "frame") -> None:
         try:
             self._save_queue.put_nowait((pixels_bytes, path))
             self.logger.debug(f"Enqueued save: {path.name}")
@@ -177,9 +171,7 @@ class LoggerNode(Node):
 
             raw_gesture = data.contents.gesture_name
             if isinstance(raw_gesture, bytes):
-                gesture_name = raw_gesture.decode("utf-8", errors="ignore").rstrip(
-                    "\x00"
-                )
+                gesture_name = raw_gesture.decode("utf-8", errors="ignore").rstrip("\x00")
             else:
                 gesture_name = str(raw_gesture)
 
@@ -206,18 +198,10 @@ class LoggerNode(Node):
 
     def run(self):
         # 1. Setup Ports
-        self.image_port = self.create_subscriber(
-            ServiceName.IMAGE, ImageData, EventId.IMAGE_READY
-        )
-        self.telemetry_port = self.create_subscriber(
-            ServiceName.TELEMETRY, TelemetryData, EventId.TELEMETRY_READY
-        )
-        self.action_port = self.create_subscriber(
-            ServiceName.ACTION, ActionData, EventId.ACTION_READY
-        )
-        self.perception_port = self.create_subscriber(
-            ServiceName.PERCEPTION, PerceptionData, EventId.PERCEPTION_READY
-        )
+        self.image_port = self.create_subscriber(ServiceName.IMAGE, ImageData, EventId.IMAGE_READY)
+        self.telemetry_port = self.create_subscriber(ServiceName.TELEMETRY, TelemetryData, EventId.TELEMETRY_READY)
+        self.action_port = self.create_subscriber(ServiceName.ACTION, ActionData, EventId.ACTION_READY)
+        self.perception_port = self.create_subscriber(ServiceName.PERCEPTION, PerceptionData, EventId.PERCEPTION_READY)
 
         if (
             self.image_port.subscriber is None
@@ -256,9 +240,7 @@ class LoggerNode(Node):
         try:
             while self.running:
                 # Block up to 100ms waiting for an image event (highest-frequency)
-                event_id = self.image_port.listener.timed_wait_one(
-                    iceoryx2.Duration.from_millis(100)
-                )
+                event_id = self.image_port.listener.timed_wait_one(iceoryx2.Duration.from_millis(100))
                 if event_id == self.image_port.event:
                     self._handle_image()
 

@@ -23,13 +23,26 @@ from client.common.constants import (
     ServiceName,
 )
 from client.common.node import Node
-from client.common.payloads import ImageData, PerceptionData
+from client.common.payloads import GESTURE_NAME_SIZE, ImageData, PerceptionData
 
 NODE_NAME = "vision_node"
 MODEL_PATH = Path("./data/gesture_recognizer.task")
 
+_LISTENER_TIMEOUT_MS = 500
 
-def to_c_char_array(value: str, size: int = 32) -> bytes:
+# Overlay drawing parameters
+_OVERLAY_JOINT_RADIUS = 2
+_OVERLAY_CENTER_RADIUS = 5
+_OVERLAY_FONT_SCALE = 0.55
+_OVERLAY_THICKNESS = 1
+_OVERLAY_TEXT_POS = (10, 25)
+_COLOR_JOINT = (255, 0, 0)  # red   (RGB)
+_COLOR_CENTER = (0, 255, 0)  # green (RGB)
+_COLOR_TEXT_OK = (0, 255, 0)  # green (RGB)
+_COLOR_TEXT_ERR = (0, 0, 255)  # blue  (RGB) — no-hand indicator
+
+
+def to_c_char_array(value: str, size: int = GESTURE_NAME_SIZE) -> bytes:
     """
     Convert Python string to fixed-size null-padded bytes
     suitable for ctypes.c_char * size fields.
@@ -124,9 +137,7 @@ class VisionNode(Node):
 
         try:
             while self.running:
-                event_id = self.image_port.listener.timed_wait_one(
-                    iceoryx2.Duration.from_millis(500)
-                )
+                event_id = self.image_port.listener.timed_wait_one(iceoryx2.Duration.from_millis(_LISTENER_TIMEOUT_MS))
 
                 if event_id != self.image_port.event:
                     continue
@@ -146,9 +157,7 @@ class VisionNode(Node):
                     continue
 
                 try:
-                    if not self.blackboard_read(
-                        self.blackboard_reader, "process_images"
-                    ):
+                    if not self.blackboard_read(self.blackboard_reader, "process_images"):
                         continue
 
                     # --- Iceoryx safe copy ---
@@ -157,11 +166,16 @@ class VisionNode(Node):
                     img_id = payload.contents.id
                     img_timestamp = payload.contents.timestamp
 
-                    pixels = np.frombuffer(
-                        np.ctypeslib.as_array(raw_ptr),
-                        dtype=np.uint8,
-                        count=IMAGE_SIZE,
-                    ).reshape(IMAGE_HEIGHT, IMAGE_WIDTH).copy()
+                    pixels = (
+                        np
+                        .frombuffer(
+                            np.ctypeslib.as_array(raw_ptr),
+                            dtype=np.uint8,
+                            count=IMAGE_SIZE,
+                        )
+                        .reshape(IMAGE_HEIGHT, IMAGE_WIDTH)
+                        .copy()
+                    )
 
                 finally:
                     del sample
@@ -179,8 +193,7 @@ class VisionNode(Node):
                 # VIDEO mode: guard against non-monotonic timestamps
                 if img_timestamp <= self._last_timestamp_ms:
                     self.logger.debug(
-                        f"Non-monotonic timestamp {img_timestamp} <= "
-                        f"{self._last_timestamp_ms}, skipping frame"
+                        f"Non-monotonic timestamp {img_timestamp} <= {self._last_timestamp_ms}, skipping frame"
                     )
                     continue
                 self._last_timestamp_ms = img_timestamp
@@ -217,38 +230,28 @@ class VisionNode(Node):
                 # --- Logging and overlay ---
                 if results.hand_landmarks:
                     self.logger.debug(
-                        f"Hand @ ({pixel_x},{pixel_y}) | "
-                        f"Raw: {gesture_name} ({confidence}) | "
-                        f"Stable: {stable_gesture}"
+                        f"Hand @ ({pixel_x},{pixel_y}) | Raw: {gesture_name} ({confidence}) | Stable: {stable_gesture}"
                     )
 
                     # Draw on the RGB pixels array.
                     for lm in landmarks:
                         px = int(lm.x * IMAGE_WIDTH)
                         py = int(lm.y * IMAGE_HEIGHT)
-                        cv2.circle(
-                            pixels, (px, py), 2, (255, 0, 0), -1
-                        )  # Red dots for joints
+                        cv2.circle(pixels, (px, py), _OVERLAY_JOINT_RADIUS, _COLOR_JOINT, -1)
 
-                    cv2.circle(
-                        pixels, (pixel_x, pixel_y), 5, (0, 255, 0), -1
-                    )  # Green dot for center
+                    cv2.circle(pixels, (pixel_x, pixel_y), _OVERLAY_CENTER_RADIUS, _COLOR_CENTER, -1)
 
-                    label = (
-                        stable_gesture
-                        if stable_gesture != "NONE"
-                        else (gesture_name or "")
-                    )
+                    label = stable_gesture if stable_gesture != "NONE" else (gesture_name or "")
                     if label and label != "NONE":
                         text = f"{label} ({confidence or 0.0:.2f})"
                         cv2.putText(
                             pixels,
                             text,
-                            (10, 30),
+                            _OVERLAY_TEXT_POS,
                             cv2.FONT_HERSHEY_SIMPLEX,
-                            0.7,
-                            (0, 255, 0),  # Green text
-                            2,
+                            _OVERLAY_FONT_SCALE,
+                            _COLOR_TEXT_OK,
+                            _OVERLAY_THICKNESS,
                             cv2.LINE_AA,
                         )
                 else:
@@ -256,11 +259,11 @@ class VisionNode(Node):
                     cv2.putText(
                         pixels,
                         "No hand detected",
-                        (10, 30),
+                        _OVERLAY_TEXT_POS,
                         cv2.FONT_HERSHEY_SIMPLEX,
-                        0.7,
-                        (0, 0, 255),  # Red text
-                        2,
+                        _OVERLAY_FONT_SCALE,
+                        _COLOR_TEXT_ERR,
+                        _OVERLAY_THICKNESS,
                         cv2.LINE_AA,
                     )
 
@@ -276,9 +279,7 @@ class VisionNode(Node):
                         data.contents.hand_x = pixel_x
                         data.contents.hand_y = pixel_y
                         data.contents.gesture_name = to_c_char_array(stable_gesture)
-                        data.contents.gesture_confidence = (
-                            confidence if confidence else 0.0
-                        )
+                        data.contents.gesture_confidence = confidence if confidence else 0.0
                     else:
                         data.contents.hand_detected = False
                         data.contents.hand_x = 0
@@ -294,9 +295,7 @@ class VisionNode(Node):
                     )
 
                     perc_sample.assume_init().send()
-                    self.perception_port.notifier.notify_with_custom_event_id(
-                        self.perception_port.event
-                    )
+                    self.perception_port.notifier.notify_with_custom_event_id(self.perception_port.event)
 
         except (iceoryx2.NodeWaitFailure, iceoryx2.ListenerWaitError):
             pass

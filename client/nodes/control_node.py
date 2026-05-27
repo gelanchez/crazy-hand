@@ -71,12 +71,8 @@ class ControlNode(Node):
             self._ema_x = float(x)
             self._ema_y = float(y)
         else:
-            self._ema_x = (
-                TRACKING_EMA_ALPHA * x + (1.0 - TRACKING_EMA_ALPHA) * self._ema_x
-            )
-            self._ema_y = (
-                TRACKING_EMA_ALPHA * y + (1.0 - TRACKING_EMA_ALPHA) * self._ema_y
-            )
+            self._ema_x = TRACKING_EMA_ALPHA * x + (1.0 - TRACKING_EMA_ALPHA) * self._ema_x
+            self._ema_y = TRACKING_EMA_ALPHA * y + (1.0 - TRACKING_EMA_ALPHA) * self._ema_y
         return self._ema_x, self._ema_y
 
     def _handle_gesture(self, perception):
@@ -167,9 +163,7 @@ class ControlNode(Node):
         now = time.monotonic()
         dt = now - self._last_land_tick
         self._last_land_tick = now
-        self._hover["zdistance"] = max(
-            LAND_CUTOFF, self._hover["zdistance"] - LAND_RATE * dt
-        )
+        self._hover["zdistance"] = max(LAND_CUTOFF, self._hover["zdistance"] - LAND_RATE * dt)
         if self._hover["zdistance"] <= LAND_CUTOFF:
             self._flight_command = FlightCommand.LAND  # signal wifi_node to cut motors
             self._state = FlightState.IDLE
@@ -211,12 +205,8 @@ class ControlNode(Node):
             p.thrust = self._thrust
             cmd_name = self._flight_command.name
             sample.assume_init().send()
-            self._flight_command = (
-                FlightCommand.NONE
-            )  # one-shot — reset after successful send
-            self.action_port.notifier.notify_with_custom_event_id(
-                self.action_port.event
-            )
+            self._flight_command = FlightCommand.NONE  # one-shot — reset after successful send
+            self.action_port.notifier.notify_with_custom_event_id(self.action_port.event)
             self.logger.debug(
                 f"Action: state={self._state.name}, src={source.name}, cmd={cmd_name}, "
                 f"vx={p.vx:.2f}, vy={p.vy:.2f}, yaw={p.yawrate:.1f}, z={p.zdistance:.2f}"
@@ -259,20 +249,14 @@ class ControlNode(Node):
                     elif self._state == FlightState.LANDING:
                         self._state = FlightState.AIRBORNE
                         self._hover["zdistance"] = DEFAULT_HEIGHT
-                        self.logger.info(
-                            "Re-takeoff: cancelling landing, climbing to DEFAULT_HEIGHT"
-                        )
+                        self.logger.info("Re-takeoff: cancelling landing, climbing to DEFAULT_HEIGHT")
                         changed = True
                     elif airborne:
                         self._state = FlightState.LANDING
                         self._last_land_tick = time.monotonic()
                         self._landing_source = ActionSource.KEYBOARD
-                        self._hover["vx"] = self._hover["vy"] = self._hover[
-                            "yawrate"
-                        ] = 0.0
-                        self.logger.info(
-                            f"LAND commanded from z={self._hover['zdistance']:.2f}m"
-                        )
+                        self._hover["vx"] = self._hover["vy"] = self._hover["yawrate"] = 0.0
+                        self.logger.info(f"LAND commanded from z={self._hover['zdistance']:.2f}m")
                         changed = True
 
                 # --- Emergency stop ---
@@ -325,15 +309,11 @@ class ControlNode(Node):
                     self._hover["yawrate"] = yaw
                     changed = True
                 case (True, KeyCode.W) if airborne:
-                    self._hover["zdistance"] = min(
-                        MAX_ALTITUDE, self._hover["zdistance"] + alt_step
-                    )
+                    self._hover["zdistance"] = min(MAX_ALTITUDE, self._hover["zdistance"] + alt_step)
                     self.logger.info(f"Altitude → {self._hover['zdistance']:.2f}m")
                     changed = True
                 case (True, KeyCode.S) if airborne:
-                    self._hover["zdistance"] = max(
-                        MIN_ALTITUDE, self._hover["zdistance"] - alt_step
-                    )
+                    self._hover["zdistance"] = max(MIN_ALTITUDE, self._hover["zdistance"] - alt_step)
                     self.logger.info(f"Altitude → {self._hover['zdistance']:.2f}m")
                     changed = True
 
@@ -369,15 +349,9 @@ class ControlNode(Node):
     def run(self):
         self.logger.info(f"{self.name} running")
 
-        self.command_port = self.create_subscriber(
-            ServiceName.COMMAND, CommandData, EventId.COMMAND_READY
-        )
-        self.perception_port = self.create_subscriber(
-            ServiceName.PERCEPTION, PerceptionData, EventId.PERCEPTION_READY
-        )
-        self.action_port = self.create_publisher(
-            ServiceName.ACTION, ActionData, EventId.ACTION_READY
-        )
+        self.command_port = self.create_subscriber(ServiceName.COMMAND, CommandData, EventId.COMMAND_READY)
+        self.perception_port = self.create_subscriber(ServiceName.PERCEPTION, PerceptionData, EventId.PERCEPTION_READY)
+        self.action_port = self.create_publisher(ServiceName.ACTION, ActionData, EventId.ACTION_READY)
 
         if (
             self.command_port is None
@@ -410,9 +384,7 @@ class ControlNode(Node):
         try:
             while self.running:
                 # Block up to 50ms waiting for a perception event
-                event_id = self.perception_port.listener.timed_wait_one(
-                    iceoryx2.Duration.from_millis(50)
-                )
+                event_id = self.perception_port.listener.timed_wait_one(iceoryx2.Duration.from_millis(50))
                 if event_id == self.perception_port.event:
                     self._process_perception()
 

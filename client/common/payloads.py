@@ -48,6 +48,9 @@ class ImageData(ctypes.Structure):
         return f"ImageData(id={self.id}, timestamp={self.timestamp}, size={len(self.pixels)})"
 
 
+GESTURE_NAME_SIZE = 32
+
+
 class PerceptionData(ctypes.Structure):
     _fields_ = [
         ("id", ctypes.c_uint64),
@@ -55,7 +58,7 @@ class PerceptionData(ctypes.Structure):
         ("hand_detected", ctypes.c_bool),
         ("hand_x", ctypes.c_uint16),
         ("hand_y", ctypes.c_uint16),
-        ("gesture_name", ctypes.c_char * 32),
+        ("gesture_name", ctypes.c_char * GESTURE_NAME_SIZE),
         ("gesture_confidence", ctypes.c_float),
         ("processed_pixels", ctypes.c_ubyte * (IMAGE_SIZE * 3)),
     ]
@@ -71,13 +74,13 @@ class TelemetryData(ctypes.Structure):
         ("status", ctypes.c_uint8),
         ("fps", ctypes.c_float),
         # State estimate (Kalman filter)
-        ("x", ctypes.c_float),      # position m
+        ("x", ctypes.c_float),  # position m
         ("y", ctypes.c_float),
         ("z", ctypes.c_float),
-        ("vx", ctypes.c_float),     # velocity m/s
+        ("vx", ctypes.c_float),  # velocity m/s
         ("vy", ctypes.c_float),
         ("vz", ctypes.c_float),
-        ("roll", ctypes.c_float),   # attitude deg
+        ("roll", ctypes.c_float),  # attitude deg
         ("pitch", ctypes.c_float),
         ("yaw", ctypes.c_float),
         # Motor PWM (0–65535)

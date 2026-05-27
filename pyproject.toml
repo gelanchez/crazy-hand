@@ -1,7 +1,7 @@
 [project]
 name = "crazyflie-tfm"
-version = "0.0.1"
-description = "Crazyflie control and image processing via Iceorx2 and Python"
+version = "1.0.0"
+description = "Drone ground station — live video, gesture control, and telemetry over Wi-Fi via iceoryx2 IPC"
 authors = [{ name = "José Ángel Sánchez" }]
 keywords = [
     "crazyflie",
@@ -28,14 +28,14 @@ readme = "README.md"
 requires-python = ">=3.12"
 
 [project.optional-dependencies]
-dev = [
-    "isort",
-    "ruff",
-]
+dev = ["isort", "ruff"]
 
 [project.urls]
 Homepage = "https://github.com/gelanchez/crazy-hand-control"
 Repository = "https://github.com/gelanchez/crazy-hand-control.git"
+
+[tool.ruff]
+line-length = 120
 
 [tool.ruff.format]
 preview = true

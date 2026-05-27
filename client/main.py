@@ -61,9 +61,7 @@ def main(sim):
                     if process.returncode in (0, -signal.SIGINT, -signal.SIGTERM):
                         logger.info(f"Node '{node}' finished.")
                     else:
-                        logger.error(
-                            f"Node '{node}' terminated unexpectedly with code {process.returncode}"
-                        )
+                        logger.error(f"Node '{node}' terminated unexpectedly with code {process.returncode}")
                         crashed = True
                     break
             else:

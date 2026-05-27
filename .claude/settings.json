@@ -11,7 +11,8 @@
       "Bash(python3 -c ' *)",
       "Bash(awk 'NR>=1780 && NR<=1900')",
       "Bash(.venv/bin/pip show *)",
-      "Bash(.venv/bin/python --version)"
+      "Bash(.venv/bin/python --version)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('client/nodes/wifi_node.py'\\).read\\(\\)\\); print\\('OK'\\)\")"
     ],
     "additionalDirectories": [
       "/tmp"
