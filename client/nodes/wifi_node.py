@@ -369,7 +369,7 @@ class WifiNode(Node):
             except Exception as e:
                 if self.running:
                     self.logger.warning(f"Telemetry publish error: {e}")
-            time.sleep(1)  # TODO
+            time.sleep(1)  # TODO: replace with event-driven telemetry loop
 
     # --- Flight control ---
 

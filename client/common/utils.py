@@ -49,7 +49,7 @@ def setup_logging(
 
     plain_formatter = logging.Formatter(_FMT, _DATEFMT)
 
-    # CONSOLE HANDLER — limited to console_level to suppress high-frequency DEBUG
+    # Console handler — limited to console_level to suppress high-frequency DEBUG
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(console_level)
     use_color = hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
@@ -59,7 +59,7 @@ def setup_logging(
         console_handler.setFormatter(plain_formatter)
     logger.addHandler(console_handler)
 
-    # ASYNC FILE HANDLER — background thread writes to disk, zero latency on callers
+    # Async file handler — background thread writes to disk, zero latency on callers
     if enable_file_logging:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
         file_handler = RotatingFileHandler(

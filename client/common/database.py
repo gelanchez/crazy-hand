@@ -24,9 +24,7 @@ from client.common.utils import setup_logging
 logger = setup_logging("database")
 
 
-# =========================================================
-# DATA MODELS
-# =========================================================
+# --- Data models ---
 
 
 @dataclass
@@ -67,9 +65,7 @@ class PerceptionSample:
 Sample = Union[TelemetrySample, ActionSample, PerceptionSample]
 
 
-# =========================================================
-# DATABASE
-# =========================================================
+# --- Database ---
 
 
 class Database:
@@ -105,9 +101,7 @@ class Database:
     def __exit__(self, exc_type, exc, tb):
         self.close()
 
-    # =====================================================
-    # CONNECTION
-    # =====================================================
+    # --- Connection ---
 
     def _connect(self) -> bool:
         if self.closed:
@@ -131,9 +125,7 @@ class Database:
             logger.warning(f"QuestDB connection failed: {e}")
             return False
 
-    # =====================================================
-    # WORKER
-    # =====================================================
+    # --- Worker ---
 
     def _worker(self):
         while not self._stop:
@@ -143,9 +135,7 @@ class Database:
             except Exception as e:
                 logger.error(f"Flush worker error: {e}")
 
-    # =====================================================
-    # LOG
-    # =====================================================
+    # --- Log ---
 
     def log(self, sample: Sample):
         if self.closed:
@@ -190,9 +180,7 @@ class Database:
         except Exception as e:
             logger.error(f"Unexpected error during logging: {e}")
 
-    # =====================================================
-    # FLUSH
-    # =====================================================
+    # --- Flush ---
 
     def flush(self):
         if self.sender is None:
@@ -233,9 +221,7 @@ class Database:
             # restore lost data, preserving chronological order
             self.buffers[table] = rows + self.buffers[table]
 
-    # =====================================================
-    # SHUTDOWN
-    # =====================================================
+    # --- Shutdown ---
 
     def close(self):
         if self.closed:
@@ -263,9 +249,7 @@ class Database:
 
         self.sender = None
 
-    # =====================================================
-    # QUESTDB STARTUP
-    # =====================================================
+    # --- QuestDB startup ---
 
     @staticmethod
     def is_questdb_running(host="127.0.0.1", port=9000):
@@ -315,7 +299,7 @@ class Database:
 
         for table in tables:
             try:
-                # ---- existence probe (cheap, safe) ----
+                # --- Existence probe (cheap, safe) ---
                 probe_sql = f"SELECT count() FROM {table} LIMIT 1"
                 Database._exec_sql(probe_sql)
 
@@ -325,7 +309,7 @@ class Database:
                 continue
 
             try:
-                # ---- actual cleanup ----
+                # --- Actual cleanup ---
                 sql = f"""
                     ALTER TABLE {table}
                     DROP PARTITION WHERE timestamp < dateadd('h', -{hours}, now())

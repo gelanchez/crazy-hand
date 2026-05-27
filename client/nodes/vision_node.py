@@ -42,9 +42,7 @@ class VisionNode(Node):
     def __init__(self, level=logging.DEBUG):
         super().__init__(NODE_NAME, level=level)
 
-        # =========================================================
-        # MEDIAPIPE CONFIG
-        # =========================================================
+        # --- MediaPipe config ---
         base_options = python.BaseOptions(model_asset_path=str(MODEL_PATH))
 
         options = vision.GestureRecognizerOptions(
@@ -59,9 +57,7 @@ class VisionNode(Node):
         self.recognizer = vision.GestureRecognizer.create_from_options(options)
         self._last_timestamp_ms: int = -1  # guard for VIDEO mode monotonic requirement
 
-        # =========================================================
-        # GESTURE FILTERING PARAMETERS
-        # =========================================================
+        # --- Gesture filtering parameters ---
         self.confidence_threshold = GESTURE_THRESHOLD
         self.debounce_ms = GESTURE_DEBOUNCE_MS
         self.hysteresis_ms = GESTURE_HYSTERESIS_MS
@@ -73,34 +69,24 @@ class VisionNode(Node):
         self.confirmed_gesture = "NONE"
         self.last_confirm_time = 0
 
-    # =========================================================
-    # STABLE GESTURE RESOLUTION
-    # =========================================================
+    # --- Stable gesture resolution ---
     def _update_gesture(self, candidate, confidence):
         now = time.time() * 1000  # ms
 
-        # -------------------------
-        # CONFIDENCE FILTER
-        # -------------------------
+        # --- Confidence filter ---
         if confidence is None or confidence < self.confidence_threshold:
             candidate = "NONE"
 
-        # -------------------------
-        # NEW CANDIDATE
-        # -------------------------
+        # --- New candidate ---
         if candidate != self.current_candidate:
             self.current_candidate = candidate
             self.candidate_start_time = now
 
         elapsed = now - self.candidate_start_time
 
-        # -------------------------
-        # DEBOUNCE (STABILITY CHECK)
-        # -------------------------
+        # --- Debounce (stability check) ---
         if elapsed >= self.debounce_ms:
-            # -------------------------
-            # HYSTERESIS CHECK
-            # -------------------------
+            # --- Hysteresis check ---
             if self.confirmed_gesture != candidate:
                 if (now - self.last_confirm_time) < self.hysteresis_ms:
                     return self.confirmed_gesture  # block fast switching
@@ -116,9 +102,6 @@ class VisionNode(Node):
 
         return self.confirmed_gesture
 
-    # =========================================================
-    # MAIN LOOP
-    # =========================================================
     def run(self):
         self.image_port = self.create_subscriber(
             ServiceName.IMAGE,
@@ -168,9 +151,7 @@ class VisionNode(Node):
                     ):
                         continue
 
-                    # ======================================================
-                    # ICEORYX SAFE COPY
-                    # ======================================================
+                    # --- Iceoryx safe copy ---
                     payload = sample.payload()
                     raw_ptr = payload.contents.pixels
                     img_id = payload.contents.id
@@ -185,9 +166,7 @@ class VisionNode(Node):
                 finally:
                     del sample
 
-                # ======================================================
-                # IMAGE PREP
-                # ======================================================
+                # --- Image prep ---
                 # cv2.COLOR_GRAY2RGB: single C++ call, output already contiguous
                 pixels = cv2.cvtColor(pixels, cv2.COLOR_GRAY2RGB)
 
@@ -196,9 +175,7 @@ class VisionNode(Node):
                     data=pixels,
                 )
 
-                # ======================================================
-                # INFERENCE
-                # ======================================================
+                # --- Inference ---
                 # VIDEO mode: guard against non-monotonic timestamps
                 if img_timestamp <= self._last_timestamp_ms:
                     self.logger.debug(
@@ -209,9 +186,7 @@ class VisionNode(Node):
                 self._last_timestamp_ms = img_timestamp
                 results = self.recognizer.recognize_for_video(mp_image, img_timestamp)
 
-                # ======================================================
-                # HAND CHECK
-                # ======================================================
+                # --- Hand detection ---
                 pixel_x, pixel_y = 0, 0
                 if results.hand_landmarks:
                     landmarks = results.hand_landmarks[0]
@@ -222,9 +197,7 @@ class VisionNode(Node):
                     pixel_x = int(cx * IMAGE_WIDTH)
                     pixel_y = int(cy * IMAGE_HEIGHT)
 
-                # ======================================================
-                # GESTURE EXTRACTION
-                # ======================================================
+                # --- Gesture extraction ---
                 gesture_name = None
                 confidence = None
 
@@ -235,17 +208,13 @@ class VisionNode(Node):
                         gesture_name = top.category_name
                         confidence = float(top.score)
 
-                # ======================================================
-                # FILTERED + STABLE GESTURE
-                # ======================================================
+                # --- Stable gesture ---
                 stable_gesture = self._update_gesture(
                     gesture_name,
                     confidence,
                 )
 
-                # ======================================================
-                # LOGGING & OVERLAY DATA
-                # ======================================================
+                # --- Logging and overlay ---
                 if results.hand_landmarks:
                     self.logger.debug(
                         f"Hand @ ({pixel_x},{pixel_y}) | "
@@ -295,9 +264,7 @@ class VisionNode(Node):
                         cv2.LINE_AA,
                     )
 
-                # ======================================================
-                # PUBLISH PERCEPTION DATA
-                # ======================================================
+                # --- Publish perception data ---
                 perc_sample = self.perception_port.publisher.loan_uninit()
                 if perc_sample is not None:
                     data = perc_sample.payload()
