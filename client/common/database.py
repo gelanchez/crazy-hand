@@ -33,6 +33,23 @@ class TelemetrySample:
     ts: datetime
     fps: float
     status: AppStatus
+    # State estimate (Kalman filter)
+    x: float = 0.0       # position m
+    y: float = 0.0
+    z: float = 0.0
+    vx: float = 0.0      # velocity m/s
+    vy: float = 0.0
+    vz: float = 0.0
+    roll: float = 0.0    # attitude deg
+    pitch: float = 0.0
+    yaw: float = 0.0
+    # Motor PWM (0–65535)
+    m1: int = 0
+    m2: int = 0
+    m3: int = 0
+    m4: int = 0
+    # Battery
+    vbat: float = 0.0
 
 
 @dataclass

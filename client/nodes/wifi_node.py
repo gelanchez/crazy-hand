@@ -1,7 +1,9 @@
 import ctypes
 import logging
+import math
 import platform
 import queue
+import random
 import struct
 import subprocess
 import threading
@@ -14,6 +16,7 @@ import iceoryx2
 import numpy as np
 from cflib.cpx import CPXFunction
 from cflib.crazyflie import Crazyflie
+from cflib.crazyflie.log import LogConfig
 
 from client.common.constants import (
     CRAZYFLIE_IP,
@@ -157,6 +160,9 @@ class WifiNode(Node):
         self._last_frame_time: float | None = None  # set in _publish_frame
         self._connect_time: float = 0.0  # set after successful connect
         self._reconnecting = False  # True while watchdog is reconnecting
+        self._drone_state: dict = {}          # latest log values from cflib
+        self._drone_state_lock = threading.Lock()
+        self._sim_start_time: float = 0.0    # set when sim starts
 
     # --- Image pipeline ---
 
@@ -357,6 +363,28 @@ class WifiNode(Node):
                         payload.status = AppStatus.CONNECTED
                     else:
                         payload.status = AppStatus.DISCONNECTED
+
+                # Drone state — synthetic in sim, cflib log subsystem when connected
+                if self.sim:
+                    self._update_sim_drone_state()
+                with self._drone_state_lock:
+                    state = dict(self._drone_state)
+
+                payload.x = state.get("stateEstimate.x", 0.0)
+                payload.y = state.get("stateEstimate.y", 0.0)
+                payload.z = state.get("stateEstimate.z", 0.0)
+                payload.vx = state.get("stateEstimate.vx", 0.0)
+                payload.vy = state.get("stateEstimate.vy", 0.0)
+                payload.vz = state.get("stateEstimate.vz", 0.0)
+                payload.roll = state.get("stateEstimate.roll", 0.0)
+                payload.pitch = state.get("stateEstimate.pitch", 0.0)
+                payload.yaw = state.get("stateEstimate.yaw", 0.0)
+                payload.m1 = state.get("motor.m1", 0)
+                payload.m2 = state.get("motor.m2", 0)
+                payload.m3 = state.get("motor.m3", 0)
+                payload.m4 = state.get("motor.m4", 0)
+                payload.vbat = state.get("pm.vbat", 0.0)
+
                 sample.assume_init().send()
                 try:
                     self.telemetry_port.notifier.notify_with_custom_event_id(
@@ -369,7 +397,7 @@ class WifiNode(Node):
             except Exception as e:
                 if self.running:
                     self.logger.warning(f"Telemetry publish error: {e}")
-            time.sleep(1)  # TODO: replace with event-driven telemetry loop
+            time.sleep(0.1)
 
     # --- Flight control ---
 
@@ -507,7 +535,55 @@ class WifiNode(Node):
 
     def _on_connected(self, uri):
         self.logger.info(f"Crazyflie connected: {uri}")
+        self._setup_log_subsystem()
         self._cf_connected.set()
+
+    def _setup_log_subsystem(self) -> None:
+        """Subscribe to Crazyflie log variables at 10 Hz (state estimate, motors, battery)."""
+
+        def _log_cb(timestamp, data, logconf):
+            with self._drone_state_lock:
+                self._drone_state.update(data)
+
+        configs = [
+            ("state_pos_vel", 100, [
+                ("stateEstimate.x", "float"),
+                ("stateEstimate.y", "float"),
+                ("stateEstimate.z", "float"),
+                ("stateEstimate.vx", "float"),
+                ("stateEstimate.vy", "float"),
+                ("stateEstimate.vz", "float"),
+            ]),
+            ("state_att_batt", 100, [
+                ("stateEstimate.roll", "float"),
+                ("stateEstimate.pitch", "float"),
+                ("stateEstimate.yaw", "float"),
+                ("pm.vbat", "float"),
+            ]),
+            ("motors", 100, [
+                ("motor.m1", "uint16_t"),
+                ("motor.m2", "uint16_t"),
+                ("motor.m3", "uint16_t"),
+                ("motor.m4", "uint16_t"),
+            ]),
+        ]
+
+        for name, period_ms, variables in configs:
+            try:
+                lc = LogConfig(name=name, period_in_ms=period_ms)
+                for var_name, var_type in variables:
+                    lc.add_variable(var_name, var_type)
+                self.cf.log.add_config(lc)
+                lc.data_received_cb.add_callback(_log_cb)
+                lc.error_cb.add_callback(
+                    lambda conf, msg: self.logger.warning(
+                        f"Log error [{conf.name}]: {msg}"
+                    )
+                )
+                lc.start()
+                self.logger.info(f"Log config '{name}' started")
+            except Exception as e:
+                self.logger.warning(f"Log config '{name}' setup failed: {e}")
 
     def _on_connection_failed(self, uri: str, msg: str) -> None:
         # msg from cflib includes a full embedded traceback — log only the summary line
@@ -662,7 +738,60 @@ class WifiNode(Node):
 
     # --- Simulation ---
 
+    def _update_sim_drone_state(self) -> None:
+        """Populate _drone_state with synthetic flight data for sim mode.
+
+        Simulates a slow takeoff to 0.5 m, gentle oscillating position/attitude,
+        slow yaw rotation, slightly varying motor PWM, and a draining battery.
+        """
+        t = time.time() - self._sim_start_time
+
+        # Position — gentle x/y sway, z rises to 0.5 m in ~5 s
+        z_frac = min(t / 5.0, 1.0)
+        x = 0.10 * math.sin(t * 0.5)
+        y = 0.05 * math.sin(t * 0.3 + 0.5)
+        z = 0.5 * z_frac
+
+        # Velocity — analytic derivatives of position
+        vx = 0.05 * math.cos(t * 0.5)
+        vy = 0.015 * math.cos(t * 0.3 + 0.5)
+        vz = 0.1 * (1.0 - z_frac)  # zero once at cruise altitude
+
+        # Attitude — small roll/pitch oscillations, slow 5 °/s yaw
+        roll = 2.0 * math.sin(t * 0.5)
+        pitch = 1.5 * math.sin(t * 0.3 + 1.0)
+        yaw = ((t * 5.0) % 360.0) - 180.0
+
+        # Motors — base PWM proportional to z, small per-motor noise
+        base_pwm = int(20000 + 12000 * z_frac)
+        m1 = base_pwm + random.randint(-300, 300)
+        m2 = base_pwm + random.randint(-300, 300)
+        m3 = base_pwm + random.randint(-300, 300)
+        m4 = base_pwm + random.randint(-300, 300)
+
+        # Battery — starts at 4.10 V, drains at ~1 mV/s
+        vbat = max(3.50, 4.10 - t * 0.001)
+
+        with self._drone_state_lock:
+            self._drone_state.update({
+                "stateEstimate.x": x,
+                "stateEstimate.y": y,
+                "stateEstimate.z": z,
+                "stateEstimate.vx": vx,
+                "stateEstimate.vy": vy,
+                "stateEstimate.vz": vz,
+                "stateEstimate.roll": roll,
+                "stateEstimate.pitch": pitch,
+                "stateEstimate.yaw": yaw,
+                "motor.m1": m1,
+                "motor.m2": m2,
+                "motor.m3": m3,
+                "motor.m4": m4,
+                "pm.vbat": vbat,
+            })
+
     def _run_sim(self) -> None:
+        self._sim_start_time = time.time()
         _y = np.arange(IMAGE_HEIGHT, dtype=np.uint16).reshape(-1, 1)
         _x = np.arange(IMAGE_WIDTH, dtype=np.uint16).reshape(1, -1)
         threading.Thread(target=self._telemetry_loop, daemon=True).start()
@@ -725,6 +854,22 @@ class WifiNode(Node):
                 # reliably on the first such notification after boot; the second one
                 # consistently kicks the pipeline.  The ~1.5 s overhead is worth it.
                 self._startup_link_reset()
+
+                # Link reset may time out if GAP8 CPX traffic floods the CRTP
+                # channel during TOC download.  Wait up to another 20 s for
+                # cflib to finish connecting before calling deck check or any
+                # other CF API — param/log ops crash (struct.error) when TOC
+                # is not yet available.
+                if not self.cf.is_connected():
+                    self.logger.warning(
+                        "CF not connected after link reset, waiting up to 20 s..."
+                    )
+                    self._cf_connected.wait(timeout=20.0)
+                    if not self.cf.is_connected():
+                        self.logger.error(
+                            "CF failed to reconnect after link reset — exiting"
+                        )
+                        return
 
                 # Pre-register CPX APP queue immediately.  GAP8 starts streaming
                 # ~800 ms before cflib fires _on_connected; any APP packet that

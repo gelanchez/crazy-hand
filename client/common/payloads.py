@@ -70,6 +70,23 @@ class TelemetryData(ctypes.Structure):
     _fields_ = [
         ("status", ctypes.c_uint8),
         ("fps", ctypes.c_float),
+        # State estimate (Kalman filter)
+        ("x", ctypes.c_float),      # position m
+        ("y", ctypes.c_float),
+        ("z", ctypes.c_float),
+        ("vx", ctypes.c_float),     # velocity m/s
+        ("vy", ctypes.c_float),
+        ("vz", ctypes.c_float),
+        ("roll", ctypes.c_float),   # attitude deg
+        ("pitch", ctypes.c_float),
+        ("yaw", ctypes.c_float),
+        # Motor PWM (0–65535)
+        ("m1", ctypes.c_uint16),
+        ("m2", ctypes.c_uint16),
+        ("m3", ctypes.c_uint16),
+        ("m4", ctypes.c_uint16),
+        # Battery
+        ("vbat", ctypes.c_float),
     ]
 
     def __str__(self) -> str:
@@ -77,4 +94,10 @@ class TelemetryData(ctypes.Structure):
             status_str = AppStatus(self.status).name
         except ValueError:
             status_str = "UNKNOWN"
-        return f"TelemetryData(status={status_str}, fps={self.fps:.1f})"
+        return (
+            f"TelemetryData(status={status_str}, fps={self.fps:.1f}, "
+            f"pos=({self.x:.2f},{self.y:.2f},{self.z:.2f}), "
+            f"att=({self.roll:.1f},{self.pitch:.1f},{self.yaw:.1f}), "
+            f"motors=({self.m1},{self.m2},{self.m3},{self.m4}), "
+            f"vbat={self.vbat:.2f}V)"
+        )

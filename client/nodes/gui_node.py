@@ -76,6 +76,7 @@ APP_STATUS_TEXT = {
 class ImageReceiverThreadNode(Node, QThread):
     status_changed = Signal(str)
     image_received = Signal(object)
+    telemetry_updated = Signal(dict)
 
     def __init__(self, parent=None):
         QThread.__init__(self, parent)
@@ -186,22 +187,33 @@ class ImageReceiverThreadNode(Node, QThread):
                         else:
                             del sample
 
-                # Drain telemetry subscriber — update status bar
+                # Drain telemetry subscriber — update status bar and sidebar
                 while True:
                     sample = self.telemetry_port.subscriber.receive()
                     if sample is None:
                         break
                     data = sample.payload()
+                    c = data.contents
                     try:
-                        status_val = AppStatus(data.contents.status)
+                        status_val = AppStatus(c.status)
                     except ValueError:
                         status_val = AppStatus.DISCONNECTED
-                    fps = data.contents.fps
-                    del data, sample
+                    fps = c.fps
+                    tele_data = {
+                        "status": status_val,
+                        "fps": fps,
+                        "x": c.x, "y": c.y, "z": c.z,
+                        "vx": c.vx, "vy": c.vy, "vz": c.vz,
+                        "roll": c.roll, "pitch": c.pitch, "yaw": c.yaw,
+                        "m1": c.m1, "m2": c.m2, "m3": c.m3, "m4": c.m4,
+                        "vbat": c.vbat,
+                    }
+                    del c, data, sample
                     status_text = APP_STATUS_TEXT.get(status_val, "Unknown State")
                     if fps > 0:
                         status_text = f"{status_text} — {fps:.1f} fps"
                     self.status_changed.emit(status_text)
+                    self.telemetry_updated.emit(tele_data)
 
         except (
             iceoryx2.NodeWaitFailure,
@@ -277,6 +289,7 @@ class MainWindow(QMainWindow):
 
         self.image_receiver.status_changed.connect(self._on_status_changed)
         self.image_receiver.image_received.connect(self.update_image)
+        self.image_receiver.telemetry_updated.connect(self._on_telemetry_updated)
         self.image_receiver.start()
 
         self.statusBar().showMessage("Initializing...")
@@ -347,12 +360,73 @@ class MainWindow(QMainWindow):
         video_layout.addWidget(self.video_label)
         main_layout.addWidget(video_panel, 1)
 
+        # --- Telemetry sidebar ---
         tele_panel = QFrame()
         tele_panel.setFixedWidth(MainWindow.PANEL_WIDTH)
+        tele_panel.setFrameShape(QFrame.Shape.StyledPanel)
         tele_layout = QVBoxLayout(tele_panel)
-        title = QLabel("TELEMETRY")
-        title.setFont(QFont("Outfit", 18, QFont.Bold))
-        tele_layout.addWidget(title)
+        tele_layout.setContentsMargins(10, 10, 10, 10)
+        tele_layout.setSpacing(2)
+
+        self._tele_labels: dict[str, QLabel] = {}
+        val_font = QFont("Monospace", 10)
+        val_font.setStyleHint(QFont.StyleHint.Monospace)
+
+        def _add_section(header: str):
+            sep = QFrame()
+            sep.setFrameShape(QFrame.Shape.HLine)
+            sep.setFrameShadow(QFrame.Shadow.Sunken)
+            tele_layout.addWidget(sep)
+            h = QLabel(header)
+            h.setFont(QFont("Outfit", 9, QFont.Weight.Bold))
+            h.setStyleSheet("color: #888;")
+            tele_layout.addWidget(h)
+
+        def _add_row(label: str, key: str):
+            row_widget = QWidget()
+            row_layout = QHBoxLayout(row_widget)
+            row_layout.setContentsMargins(4, 1, 4, 1)
+            lbl = QLabel(label)
+            lbl.setFont(val_font)
+            val = QLabel("—")
+            val.setFont(val_font)
+            val.setAlignment(
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+            )
+            row_layout.addWidget(lbl)
+            row_layout.addStretch()
+            row_layout.addWidget(val)
+            tele_layout.addWidget(row_widget)
+            self._tele_labels[key] = val
+
+        _add_section("STATUS")
+        _add_row("Status", "status")
+        _add_row("FPS", "fps")
+
+        _add_section("POSITION (m)")
+        _add_row("X", "x")
+        _add_row("Y", "y")
+        _add_row("Z", "z")
+
+        _add_section("VELOCITY (m/s)")
+        _add_row("Vx", "vx")
+        _add_row("Vy", "vy")
+        _add_row("Vz", "vz")
+
+        _add_section("ATTITUDE (°)")
+        _add_row("Roll", "roll")
+        _add_row("Pitch", "pitch")
+        _add_row("Yaw", "yaw")
+
+        _add_section("MOTORS (PWM)")
+        _add_row("M1", "m1")
+        _add_row("M2", "m2")
+        _add_row("M3", "m3")
+        _add_row("M4", "m4")
+
+        _add_section("BATTERY")
+        _add_row("VBat", "vbat")
+
         tele_layout.addStretch()
         main_layout.addWidget(tele_panel)
 
@@ -379,6 +453,34 @@ class MainWindow(QMainWindow):
         if text.startswith(APP_STATUS_TEXT[AppStatus.DISCONNECTED]):
             self.video_label.clear()
             self.video_label.setText("Waiting for video stream...")
+
+    @Slot(dict)
+    def _on_telemetry_updated(self, data: dict):
+        def _set(key: str, text: str):
+            lbl = self._tele_labels.get(key)
+            if lbl:
+                lbl.setText(text)
+
+        status_val = data.get("status", AppStatus.DISCONNECTED)
+        _set("status", APP_STATUS_TEXT.get(status_val, "—"))
+
+        fps = data.get("fps", 0.0)
+        _set("fps", f"{fps:.1f}" if fps > 0 else "—")
+
+        _set("x",     f"{data.get('x',     0.0):+.2f}")
+        _set("y",     f"{data.get('y',     0.0):+.2f}")
+        _set("z",     f"{data.get('z',     0.0):+.2f}")
+        _set("vx",    f"{data.get('vx',    0.0):+.2f}")
+        _set("vy",    f"{data.get('vy',    0.0):+.2f}")
+        _set("vz",    f"{data.get('vz',    0.0):+.2f}")
+        _set("roll",  f"{data.get('roll',  0.0):+.1f}°")
+        _set("pitch", f"{data.get('pitch', 0.0):+.1f}°")
+        _set("yaw",   f"{data.get('yaw',   0.0):+.1f}°")
+        _set("m1",    str(data.get("m1", 0)))
+        _set("m2",    str(data.get("m2", 0)))
+        _set("m3",    str(data.get("m3", 0)))
+        _set("m4",    str(data.get("m4", 0)))
+        _set("vbat",  f"{data.get('vbat', 0.0):.2f} V")
 
     @Slot(object)
     def update_image(self, pixels: np.ndarray):

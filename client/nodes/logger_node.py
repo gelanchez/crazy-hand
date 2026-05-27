@@ -116,12 +116,27 @@ class LoggerNode(Node):
                 status_enum = AppStatus(data.contents.status)
             except ValueError:
                 status_enum = AppStatus.DISCONNECTED
+            c = data.contents
             telemetry_sample = TelemetrySample(
                 ts=datetime.now(timezone.utc),
-                fps=data.contents.fps,
+                fps=c.fps,
                 status=status_enum,
+                x=c.x,
+                y=c.y,
+                z=c.z,
+                vx=c.vx,
+                vy=c.vy,
+                vz=c.vz,
+                roll=c.roll,
+                pitch=c.pitch,
+                yaw=c.yaw,
+                m1=c.m1,
+                m2=c.m2,
+                m3=c.m3,
+                m4=c.m4,
+                vbat=c.vbat,
             )
-            del data, sample
+            del c, data, sample
             self.database.log(telemetry_sample)
 
     def _handle_action(self):
