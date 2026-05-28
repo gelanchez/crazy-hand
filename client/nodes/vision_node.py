@@ -13,6 +13,9 @@ from mediapipe.tasks.python import vision
 
 from client.common.blackboards import CONFIG
 from client.common.constants import (
+    CLAHE_CLIP_LIMIT,
+    CLAHE_ENABLED,
+    CLAHE_TILE_GRID_SIZE,
     GESTURE_DEBOUNCE_MS,
     GESTURE_HYSTERESIS_MS,
     GESTURE_MIN_CONFIDENCE,
@@ -70,6 +73,9 @@ class VisionNode(Node):
 
         self.recognizer = vision.GestureRecognizer.create_from_options(options)
         self._last_timestamp_ms: int = -1  # guard for VIDEO mode monotonic requirement
+
+        # Adaptive contrast normalisation — improves hand detection in variable lighting
+        self._clahe = cv2.createCLAHE(clipLimit=CLAHE_CLIP_LIMIT, tileGridSize=CLAHE_TILE_GRID_SIZE)
 
         # --- Gesture filtering parameters ---
         self._confidence_threshold = GESTURE_THRESHOLD
@@ -182,6 +188,8 @@ class VisionNode(Node):
                     del sample
 
                 # --- Image prep ---
+                if CLAHE_ENABLED:
+                    pixels = self._clahe.apply(pixels)
                 # cv2.COLOR_GRAY2RGB: single C++ call, output already contiguous
                 pixels = cv2.cvtColor(pixels, cv2.COLOR_GRAY2RGB)
 

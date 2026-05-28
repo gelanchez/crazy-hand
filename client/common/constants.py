@@ -93,6 +93,9 @@ GESTURE_MIN_CONFIDENCE = 0.5  # MediaPipe hand detection / presence / tracking
 GESTURE_THRESHOLD = 0.65  # minimum confidence to accept a gesture
 GESTURE_DEBOUNCE_MS = 300  # stable time required before confirming gesture
 GESTURE_HYSTERESIS_MS = 200  # cooldown to prevent rapid gesture switching
+CLAHE_ENABLED = True
+CLAHE_CLIP_LIMIT = 2.0  # max contrast amplification per tile (higher = more aggressive)
+CLAHE_TILE_GRID_SIZE = (8, 8)  # grid of tiles for adaptive histogram equalisation
 
 # Tracking
 TRACKING_EMA_ALPHA = 0.3  # EMA smoothing factor for hand position (0=frozen, 1=raw)
