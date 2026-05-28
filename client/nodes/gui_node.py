@@ -264,15 +264,14 @@ class GuiNode(Node, QThread):
                 self._drain_perception(process_images)
                 self._drain_telemetry()
 
-        except (
-            iceoryx2.NodeWaitFailure,
-            iceoryx2.ListenerWaitError,
-            KeyboardInterrupt,
-        ):
+        except KeyboardInterrupt:
             pass
+        except (iceoryx2.NodeWaitFailure, iceoryx2.ListenerWaitError) as e:
+            self.logger.warning(f"iceoryx2 wait interrupted: {e}")
         except Exception as e:
             self.logger.error(f"{NODE_NAME} run error: {e}", exc_info=True)
         finally:
+            self.stop()
             self.logger.info(f"{NODE_NAME} shut down")
             self.status_changed.emit(APP_STATUS_TEXT[AppStatus.DISCONNECTED])
 

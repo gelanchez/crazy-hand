@@ -1,5 +1,6 @@
 import logging
 import queue
+import sys
 import threading
 import time
 from datetime import datetime, timezone
@@ -249,15 +250,14 @@ class LoggerNode(Node):
                 self._handle_action()
                 self._handle_perception()
 
-        except (
-            iceoryx2.NodeWaitFailure,
-            iceoryx2.ListenerWaitError,
-            KeyboardInterrupt,
-        ):
+        except KeyboardInterrupt:
             pass
+        except (iceoryx2.NodeWaitFailure, iceoryx2.ListenerWaitError) as e:
+            self.logger.warning(f"iceoryx2 wait interrupted: {e}")
         except Exception as e:
             self.logger.error(f"LoggerNode error: {e}", exc_info=True)
         finally:
+            self.stop()
             self._save_queue.put(None)  # signal save worker to stop
             self._save_thread.join(timeout=5)
             self.database.close()

@@ -1,5 +1,6 @@
 import ctypes
 import logging
+import sys
 import time
 from pathlib import Path
 
@@ -297,10 +298,13 @@ class VisionNode(Node):
                     perc_sample.assume_init().send()
                     self.perception_port.notifier.notify_with_custom_event_id(self.perception_port.event)
 
-        except (iceoryx2.NodeWaitFailure, iceoryx2.ListenerWaitError, KeyboardInterrupt):
+        except KeyboardInterrupt:
             pass
+        except (iceoryx2.NodeWaitFailure, iceoryx2.ListenerWaitError) as e:
+            self.logger.warning(f"iceoryx2 wait interrupted: {e}")
 
         finally:
+            self.stop()
             self.logger.info(f"{NODE_NAME} shut down")
 
 

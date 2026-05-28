@@ -1,4 +1,5 @@
 import logging
+import sys
 import time
 
 import iceoryx2
@@ -387,15 +388,14 @@ class ControlNode(Node):
                 elif self._state == FlightState.MOTOR_TESTING:
                     self._tick_motor_test()
 
-        except (
-            iceoryx2.NodeWaitFailure,
-            iceoryx2.ListenerWaitError,
-            KeyboardInterrupt,
-        ):
+        except KeyboardInterrupt:
             pass
+        except (iceoryx2.NodeWaitFailure, iceoryx2.ListenerWaitError) as e:
+            self.logger.warning(f"iceoryx2 wait interrupted: {e}")
         except Exception as e:
             self.logger.error(f"ControlNode error: {e}", exc_info=True)
         finally:
+            self.stop()
             self.logger.info(f"{NODE_NAME} shut down")
 
 

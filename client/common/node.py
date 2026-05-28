@@ -62,8 +62,11 @@ class Node:
         self.running = True
         self.logger.info(f"Node {self.name} initialized")
 
-    def _signal_handler(self, _sig, _frame):
+    def stop(self):
         self.running = False
+
+    def _signal_handler(self, _sig, _frame):
+        self.stop()
 
     @staticmethod
     def setup_iceoryx2_config() -> None:

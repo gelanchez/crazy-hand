@@ -1,6 +1,7 @@
 import ctypes
 import logging
 import math
+import sys
 import platform
 import queue
 import random
@@ -911,15 +912,14 @@ class WifiNode(Node):
                 while self.running:
                     time.sleep(0.5)
 
-        except (
-            KeyboardInterrupt,
-            iceoryx2.NodeWaitFailure,
-            iceoryx2.ListenerWaitError,
-        ):
+        except KeyboardInterrupt:
             pass
+        except (iceoryx2.NodeWaitFailure, iceoryx2.ListenerWaitError) as e:
+            self.logger.warning(f"iceoryx2 wait interrupted: {e}")
         except Exception as e:
             self.logger.error(f"WifiNode error: {e}")
         finally:
+            self.stop()
             self.running = False
             if not self._sim and hasattr(self, "cf"):
                 try:
