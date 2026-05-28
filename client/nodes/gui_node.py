@@ -71,6 +71,7 @@ APP_STATUS_TEXT = {
     AppStatus.CONNECTED: "Connected",
     AppStatus.DISCONNECTED: "Disconnected",
     AppStatus.SIMULATING: "Simulating",
+    AppStatus.RECONNECTING: "Reconnecting",
 }
 
 # FPS colour thresholds — tune per codec (PNG ≈ 9 fps, JPG faster)
@@ -115,7 +116,7 @@ _KEY_MAP: dict = {
 }
 
 
-class ImageReceiverThreadNode(Node, QThread):
+class GuiNode(Node, QThread):
     status_changed = Signal(str)
     image_received = Signal(object)
     telemetry_updated = Signal(dict)
@@ -271,8 +272,9 @@ class ImageReceiverThreadNode(Node, QThread):
             pass
         except Exception as e:
             self.logger.error(f"{NODE_NAME} run error: {e}", exc_info=True)
-
-        self.status_changed.emit(APP_STATUS_TEXT[AppStatus.DISCONNECTED])
+        finally:
+            self.logger.info(f"{NODE_NAME} shut down")
+            self.status_changed.emit(APP_STATUS_TEXT[AppStatus.DISCONNECTED])
 
 
 class ShortcutsDialog(QDialog):
@@ -318,7 +320,7 @@ class MainWindow(QMainWindow):
         self.command_node = Node("gui_command", level=logging.DEBUG, handle_signals=False)
 
         # Receiver Thread (Background): Blocks while waiting for high-frequency images
-        self.image_receiver = ImageReceiverThreadNode()
+        self.image_receiver = GuiNode()
 
         # Writer first, then reader
         self.blackboard_writer = self.image_receiver.create_blackboard_writer("/config", CONFIG)
@@ -542,6 +544,7 @@ class MainWindow(QMainWindow):
                 AppStatus.CONNECTED: "#4ade80",
                 AppStatus.SIMULATING: "#fb923c",
                 AppStatus.DISCONNECTED: "#f87171",
+                AppStatus.RECONNECTING: "#facc15",
             }.get(status_val, "#888"),
         )
 
@@ -568,8 +571,8 @@ class MainWindow(QMainWindow):
             _set("pitch", f"{data.get('pitch', 0.0):+.1f}°")
             _set("yaw", f"{data.get('yaw', 0.0):+.1f}°")
             for key in ("m1", "m2", "m3", "m4"):
-                pwm = data.get(key, 0)
-                _set(key, f"{round(pwm / 65535 * 100)}%" if pwm > 0 else "0%")
+                pct = data.get(key, 0)
+                _set(key, f"{pct}%" if pct > 0 else "0%")
         else:
             for key in (
                 "x",

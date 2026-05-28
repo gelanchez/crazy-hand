@@ -42,7 +42,7 @@ _COLOR_TEXT_OK = (0, 255, 0)  # green (RGB)
 _COLOR_TEXT_ERR = (0, 0, 255)  # blue  (RGB) — no-hand indicator
 
 
-def to_c_char_array(value: str, size: int = GESTURE_NAME_SIZE) -> bytes:
+def _to_c_char_array(value: str, size: int = GESTURE_NAME_SIZE) -> bytes:
     """
     Convert Python string to fixed-size null-padded bytes
     suitable for ctypes.c_char * size fields.
@@ -71,41 +71,41 @@ class VisionNode(Node):
         self._last_timestamp_ms: int = -1  # guard for VIDEO mode monotonic requirement
 
         # --- Gesture filtering parameters ---
-        self.confidence_threshold = GESTURE_THRESHOLD
-        self.debounce_ms = GESTURE_DEBOUNCE_MS
-        self.hysteresis_ms = GESTURE_HYSTERESIS_MS
+        self._confidence_threshold = GESTURE_THRESHOLD
+        self._debounce_ms = GESTURE_DEBOUNCE_MS
+        self._hysteresis_ms = GESTURE_HYSTERESIS_MS
 
         # state tracking
-        self.current_candidate = None
-        self.candidate_start_time = 0
+        self._current_candidate = None
+        self._candidate_start_time = 0
 
-        self.confirmed_gesture = "NONE"
-        self.last_confirm_time = 0
+        self._confirmed_gesture = "NONE"
+        self._last_confirm_time = 0
 
     # --- Stable gesture resolution ---
     def _update_gesture(self, candidate, confidence):
         now = time.time() * 1000  # ms
 
         # --- Confidence filter ---
-        if confidence is None or confidence < self.confidence_threshold:
+        if confidence is None or confidence < self._confidence_threshold:
             candidate = "NONE"
 
         # --- New candidate ---
-        if candidate != self.current_candidate:
-            self.current_candidate = candidate
-            self.candidate_start_time = now
+        if candidate != self._current_candidate:
+            self._current_candidate = candidate
+            self._candidate_start_time = now
 
-        elapsed = now - self.candidate_start_time
+        elapsed = now - self._candidate_start_time
 
         # --- Debounce (stability check) ---
-        if elapsed >= self.debounce_ms:
+        if elapsed >= self._debounce_ms:
             # --- Hysteresis check ---
-            if self.confirmed_gesture != candidate:
-                if (now - self.last_confirm_time) < self.hysteresis_ms:
-                    return self.confirmed_gesture  # block fast switching
+            if self._confirmed_gesture != candidate:
+                if (now - self._last_confirm_time) < self._hysteresis_ms:
+                    return self._confirmed_gesture  # block fast switching
 
-                self.confirmed_gesture = candidate
-                self.last_confirm_time = now
+                self._confirmed_gesture = candidate
+                self._last_confirm_time = now
 
                 self.logger.info(
                     f"[CONFIRMED] Gesture: {candidate} "
@@ -113,7 +113,7 @@ class VisionNode(Node):
                     f"stable for {int(elapsed)}ms"
                 )
 
-        return self.confirmed_gesture
+        return self._confirmed_gesture
 
     def run(self):
         self.image_port = self.create_subscriber(
@@ -278,13 +278,13 @@ class VisionNode(Node):
                         data.contents.hand_detected = True
                         data.contents.hand_x = pixel_x
                         data.contents.hand_y = pixel_y
-                        data.contents.gesture_name = to_c_char_array(stable_gesture)
+                        data.contents.gesture_name = _to_c_char_array(stable_gesture)
                         data.contents.gesture_confidence = confidence if confidence else 0.0
                     else:
                         data.contents.hand_detected = False
                         data.contents.hand_x = 0
                         data.contents.hand_y = 0
-                        data.contents.gesture_name = to_c_char_array("NONE")
+                        data.contents.gesture_name = _to_c_char_array("NONE")
                         data.contents.gesture_confidence = 0.0
 
                     processed_flat = pixels.flatten()
@@ -297,7 +297,7 @@ class VisionNode(Node):
                     perc_sample.assume_init().send()
                     self.perception_port.notifier.notify_with_custom_event_id(self.perception_port.event)
 
-        except (iceoryx2.NodeWaitFailure, iceoryx2.ListenerWaitError):
+        except (iceoryx2.NodeWaitFailure, iceoryx2.ListenerWaitError, KeyboardInterrupt):
             pass
 
         finally:

@@ -1,7 +1,0 @@
-zip -r project.zip . -x "project.zip" "target/*" ".git/*" ".venv/*" "client/data/*"
-
-unzip -o project.zip -d .
-
-rm -rf /tmp/iceoryx2/*
-rm -rf /dev/shm/iox2_*
-python main.py 2>&1 | tee ../output.txt

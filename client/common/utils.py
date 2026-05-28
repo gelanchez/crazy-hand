@@ -118,6 +118,28 @@ class FPSCounter:
         return self._fps
 
 
+class EMAFilter:
+    """Exponential Moving Average filter for a single scalar signal."""
+
+    def __init__(self, alpha: float):
+        self._alpha = alpha
+        self._value: float | None = None
+
+    def update(self, value: float) -> float:
+        if self._value is None:
+            self._value = float(value)
+        else:
+            self._value = self._alpha * value + (1.0 - self._alpha) * self._value
+        return self._value
+
+    def reset(self) -> None:
+        self._value = None
+
+    @property
+    def value(self) -> float | None:
+        return self._value
+
+
 def cleanup_iceoryx2():
     """Cleans stale iceoryx2 shared memory and temp files.
     Safe to run at startup when no nodes are running.

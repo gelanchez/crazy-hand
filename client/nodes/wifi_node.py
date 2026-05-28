@@ -20,6 +20,7 @@ from cflib.crazyflie.log import LogConfig
 
 from client.common.constants import (
     CRAZYFLIE_IP,
+    CRAZYFLIE_PORT,
     CRAZYFLIE_URI,
     DEFAULT_HEIGHT,
     IMAGE_HEIGHT,
@@ -37,108 +38,17 @@ from client.common.utils import FPSCounter
 
 NODE_NAME = "wifi_node"
 
+_MOTOR_PWM_MAX = 65535  # Crazyflie uint16 motor PWM range
+
 # How often to emit frame-level DEBUG messages to console (every N frames)
 _FRAME_LOG_INTERVAL = 10
 
 # Action loop timing
-_LOOP_INTERVAL = (
-    0.05  # seconds (~20 Hz) — CF watchdog needs setpoints at least every 500 ms
-)
-_UNLOCK_PACKETS = (
-    10  # unlock packets at loop rate before first hover setpoint (~500 ms)
-)
-
-# Monkey-patch cflib to redirect all print() calls and logger output through our logger.
-# cflib uses bare print() throughout its transport and driver code — these bypass Python
-# logging entirely and appear as noise on stdout/stderr during normal connect/disconnect cycles.
-try:
-    import logging as _logging
-    import socket as _socket
-
-    import cflib.cpx
-    import cflib.cpx.transports
-    import cflib.crtp.tcpdriver
-
-    _cflib_logger = _logging.getLogger(NODE_NAME)
-
-    # Silence cflib's own Python logger (e.g. "Couldn't load link driver") so it doesn't
-    # leak to stderr via the root logger's last-resort handler.  Our connection callbacks
-    # already capture and log all meaningful events.
-    _cflib_root = _logging.getLogger("cflib")
-    if not any(isinstance(h, _logging.NullHandler) for h in _cflib_root.handlers):
-        _cflib_root.addHandler(_logging.NullHandler())
-    _cflib_root.propagate = False
-
-    # CPXRouter.run — remove print(traceback) on transport errors during disconnect
-    def _patched_cpx_router_run(self):
-        while self._connected:
-            try:
-                packet = self._transport.readPacket()
-                if packet.function.value not in self._rxQueues:
-                    _cflib_logger.debug(
-                        "CPXRouter: auto-creating queue for %s", packet.function
-                    )
-                    self._rxQueues[packet.function.value] = queue.Queue()
-                self._rxQueues[packet.function.value].put(packet)
-            except Exception:
-                if self._connected:
-                    _cflib_logger.error("CPXRouter transport error", exc_info=True)
-
-    cflib.cpx.CPXRouter.run = _patched_cpx_router_run
-
-    # CPXRouter.receivePacket — remove "Creating queue for ..." print
-    def _patched_cpx_router_receive_packet(self, function, timeout=None):
-        if function.value not in self._rxQueues:
-            _cflib_logger.debug("CPXRouter: creating queue for %s", function)
-            self._rxQueues[function.value] = queue.Queue()
-        return self._rxQueues[function.value].get(block=True, timeout=timeout)
-
-    cflib.cpx.CPXRouter.receivePacket = _patched_cpx_router_receive_packet
-
-    # SocketTransport — remove connect/disconnect/init prints
-    def _patched_socket_transport_init(self, host, port):
-        _cflib_logger.debug("CPX socket transport: %s:%s", host, port)
-        self._host = host
-        self._port = port
-        self.connect()
-
-    def _patched_socket_transport_connect(self):
-        _cflib_logger.info("Connecting CPX socket on %s:%s...", self._host, self._port)
-        self._socket = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
-        self._socket.connect((self._host, self._port))
-        _cflib_logger.debug("CPX socket connected")
-
-    def _patched_socket_transport_disconnect(self):
-        _cflib_logger.debug("Closing CPX socket transport")
-        self._socket.shutdown(_socket.SHUT_WR)
-        self._socket.close()
-        self._socket = None
-
-    cflib.cpx.transports.SocketTransport.__init__ = _patched_socket_transport_init
-    cflib.cpx.transports.SocketTransport.connect = _patched_socket_transport_connect
-    cflib.cpx.transports.SocketTransport.disconnect = (
-        _patched_socket_transport_disconnect
-    )
-
-    # TcpDriver.close — remove "Driver closed" print
-    def _patched_tcp_driver_close(self):
-        try:
-            self.cpx.close()
-            self.cpx = None
-        except Exception as e:
-            _cflib_logger.warning("TcpDriver close error: %s", e)
-        _cflib_logger.debug("TcpDriver closed")
-        self.cpx = None
-
-    cflib.crtp.tcpdriver.TcpDriver.close = _patched_tcp_driver_close
-
-except Exception:
-    pass
+_LOOP_INTERVAL = 0.05  # seconds (~20 Hz) — CF watchdog needs setpoints at least every 500 ms
+_UNLOCK_PACKETS = 10  # unlock packets at loop rate before first hover setpoint (~500 ms)
 
 
-def _fill_sim_frame(
-    image: np.ndarray, frame_id: int, _y: np.ndarray, _x: np.ndarray
-) -> None:
+def _fill_sim_frame(image: np.ndarray, frame_id: int, _y: np.ndarray, _x: np.ndarray) -> None:
     image[:] = ((_x + _y + frame_id) % 256).astype(np.uint8)
 
 
@@ -151,20 +61,137 @@ class WifiNode(Node):
     def __init__(self, sim=False):
         # DEBUG goes to file; console stays at INFO to avoid per-frame spam
         super().__init__(NODE_NAME, level=logging.DEBUG, console_level=logging.INFO)
-        self.sim = sim
+        self._sim = sim
         self._cf_connected = threading.Event()
         self._frame_id = 0
-        self.fps_counter = FPSCounter()
+        self._fps_counter = FPSCounter()
         self._console_buffer = ""
         self._frames_since_log = 0
-        self._last_frame_time: float | None = None  # set in _publish_frame
+        self._last_frame_time: float | None = None  # set in _commit_image_sample
         self._connect_time: float = 0.0  # set after successful connect
         self._reconnecting = False  # True while watchdog is reconnecting
-        self._drone_state: dict = {}          # latest log values from cflib
+        self._drone_state: dict = {}  # latest log values from cflib
         self._drone_state_lock = threading.Lock()
-        self._sim_start_time: float = 0.0    # set when sim starts
+        self._sim_start_time: float = 0.0  # set when sim starts
+        self._sim_flying: bool = False  # synced from _action_loop in sim mode
+        self._sim_hover_z: float = DEFAULT_HEIGHT
+        self._sim_flight_start: float = 0.0  # set at TAKEOFF in sim mode
+
+    # --- cflib patching ---
+
+    @staticmethod
+    def _patch_cflib() -> None:
+        """Redirect cflib print() calls and noisy logger output through our logger.
+
+        cflib uses bare print() throughout its transport and driver code — these
+        bypass Python logging entirely and appear as noise on stdout/stderr during
+        normal connect/disconnect cycles.
+        """
+        try:
+            import logging as _logging
+            import socket as _socket
+
+            import cflib.cpx
+            import cflib.cpx.transports
+            import cflib.crtp.tcpdriver
+
+            _cflib_logger = _logging.getLogger(NODE_NAME)
+
+            # Silence cflib's own Python logger (e.g. "Couldn't load link driver") so it
+            # doesn't leak to stderr via the root logger's last-resort handler.
+            _cflib_root = _logging.getLogger("cflib")
+            if not any(isinstance(h, _logging.NullHandler) for h in _cflib_root.handlers):
+                _cflib_root.addHandler(_logging.NullHandler())
+            _cflib_root.propagate = False
+
+            # CPXRouter.run — remove print(traceback) on transport errors during disconnect
+            def _patched_cpx_router_run(self):
+                while self._connected:
+                    try:
+                        packet = self._transport.readPacket()
+                        if packet.function.value not in self._rxQueues:
+                            _cflib_logger.debug("CPXRouter: auto-creating queue for %s", packet.function)
+                            self._rxQueues[packet.function.value] = queue.Queue()
+                        self._rxQueues[packet.function.value].put(packet)
+                    except Exception:
+                        if self._connected:
+                            _cflib_logger.error("CPXRouter transport error", exc_info=True)
+
+            cflib.cpx.CPXRouter.run = _patched_cpx_router_run
+
+            # CPXRouter.receivePacket — remove "Creating queue for ..." print
+            def _patched_cpx_router_receive_packet(self, function, timeout=None):
+                if function.value not in self._rxQueues:
+                    _cflib_logger.debug("CPXRouter: creating queue for %s", function)
+                    self._rxQueues[function.value] = queue.Queue()
+                return self._rxQueues[function.value].get(block=True, timeout=timeout)
+
+            cflib.cpx.CPXRouter.receivePacket = _patched_cpx_router_receive_packet
+
+            # SocketTransport — remove connect/disconnect/init prints
+            def _patched_socket_transport_init(self, host, port):
+                _cflib_logger.debug("CPX socket transport: %s:%s", host, port)
+                self._host = host
+                self._port = port
+                self.connect()
+
+            def _patched_socket_transport_connect(self):
+                _cflib_logger.info("Connecting CPX socket on %s:%s...", self._host, self._port)
+                self._socket = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+                self._socket.connect((self._host, self._port))
+                _cflib_logger.debug("CPX socket connected")
+
+            def _patched_socket_transport_disconnect(self):
+                _cflib_logger.debug("Closing CPX socket transport")
+                self._socket.shutdown(_socket.SHUT_WR)
+                self._socket.close()
+                self._socket = None
+
+            cflib.cpx.transports.SocketTransport.__init__ = _patched_socket_transport_init
+            cflib.cpx.transports.SocketTransport.connect = _patched_socket_transport_connect
+            cflib.cpx.transports.SocketTransport.disconnect = _patched_socket_transport_disconnect
+
+            # TcpDriver.close — remove "Driver closed" print
+            def _patched_tcp_driver_close(self):
+                try:
+                    self._thread.stop()  # join non-daemon receive thread before closing socket
+                    self.cpx.close()
+                    self.cpx = None
+                except Exception as e:
+                    _cflib_logger.warning("TcpDriver close error: %s", e)
+                _cflib_logger.debug("TcpDriver closed")
+                self.cpx = None
+
+            cflib.crtp.tcpdriver.TcpDriver.close = _patched_tcp_driver_close
+
+        except Exception:
+            pass
 
     # --- Image pipeline ---
+
+    def _loan_image_sample(self):
+        """Loan an uninitialised image sample and pre-fill id/timestamp."""
+        sample = self.image_port.publisher.loan_uninit()
+        payload = sample.payload().contents
+        payload.id = self._frame_id
+        payload.timestamp = int(time.time() * 1000)
+        return sample, payload
+
+    def _commit_image_sample(self, sample) -> None:
+        """Send a prepared sample and update frame counters and notifier."""
+        sample.assume_init().send()
+        self._frame_id += 1
+        self._fps_counter.update()
+        self._last_frame_time = time.time()
+        self._frames_since_log += 1
+        if self._frames_since_log >= _FRAME_LOG_INTERVAL:
+            self.logger.debug(f"FPS: {self._fps_counter.fps:.1f}")
+            self._frames_since_log = 0
+        try:
+            self.image_port.notifier.notify_with_custom_event_id(self.image_port.event)
+        except Exception:
+            # Listener may have disconnected (e.g. GUI shutdown) — not an error
+            pass
 
     def _receive_images(self) -> None:
         self.logger.info("Image reception thread started")
@@ -197,31 +224,21 @@ class WifiNode(Node):
                 if len(data) != 11 or data[0] != 0xBC:
                     continue
 
-                magic, width, height, depth, fmt, size = struct.unpack(
-                    "<BHHBBI", data[:11]
-                )
-                self.logger.debug(
-                    f"Header received: {width}x{height}, size={size}, fmt={fmt}"
-                )
+                magic, width, height, depth, fmt, size = struct.unpack("<BHHBBI", data[:11])
+                self.logger.debug(f"Header received: {width}x{height}, size={size}, fmt={fmt}")
 
                 img_stream = bytearray()
                 assembly_ok = True
 
-                while (
-                    len(img_stream) < size and self.running and self.cf.is_connected()
-                ):
+                while len(img_stream) < size and self.running and self.cf.is_connected():
                     try:
-                        packet = self.cf.link.cpx.receivePacket(
-                            CPXFunction.APP, timeout=0.5
-                        )
+                        packet = self.cf.link.cpx.receivePacket(CPXFunction.APP, timeout=0.5)
                         img_stream.extend(packet.data)
                     except queue.Empty:
                         continue
                     except Exception as e:
                         if self.running and self.cf.is_connected():
-                            self.logger.warning(
-                                f"Error during image assembly, dropping frame: {e}"
-                            )
+                            self.logger.warning(f"Error during image assembly, dropping frame: {e}")
                         assembly_ok = False
                         break
 
@@ -245,44 +262,20 @@ class WifiNode(Node):
             except Exception as e:
                 self.logger.error(f"JPEG decode error: {e}")
                 return
-
         try:
-            sample = self.image_port.publisher.loan_uninit()
-            payload = sample.payload().contents
-            payload.id = self._frame_id
-            payload.timestamp = int(time.time() * 1000)
-
-            # Copy frame data
+            sample, payload = self._loan_image_sample()
             ctypes.memmove(payload.pixels, frame_data, min(len(frame_data), IMAGE_SIZE))
-            self._frame_id += 1
-            sample.assume_init().send()
-            self.fps_counter.update()
-            self._last_frame_time = time.time()  # watchdog heartbeat
-
-            # Rate-limit FPS log to avoid flooding (full detail goes to file via DEBUG)
-            self._frames_since_log += 1
-            if self._frames_since_log >= _FRAME_LOG_INTERVAL:
-                self.logger.debug(f"FPS: {self.fps_counter.fps:.1f}")
-                self._frames_since_log = 0
-
-            try:
-                self.image_port.notifier.notify_with_custom_event_id(
-                    self.image_port.event
-                )
-            except Exception:
-                # Listener may have disconnected (e.g. GUI shutdown) — not an error
-                pass
-
+            self._commit_image_sample(sample)
         except Exception as e:
             self.logger.error(f"Error publishing frame: {e}")
 
     def _image_watchdog(self) -> None:
         """Reconnect if no images arrive within _NO_IMAGE_TIMEOUT seconds.
 
-        When the TCP connection is re-established the ESP32 re-sends
-        WIFI_CTRL_STATUS_CLIENT_CONNECTED to the GAP8, which restarts
-        the camera_task streaming loop.  Uses _startup_link_reset() so GAP8
-        reliably starts streaming on the second WIFI_CTRL(connected) signal.
+        _startup_link_reset() closes cflib, sends a bare-TCP ping to trigger
+        GAP8's first WIFI_CTRL_STATUS_CLIENT_CONNECTED notification, then
+        reconnects cflib as the reliable second notification that restarts
+        the camera_task streaming loop.
         """
         self.logger.info("Image watchdog started")
         while self.running:
@@ -290,19 +283,13 @@ class WifiNode(Node):
             if not self.running or self._reconnecting:
                 continue
 
-            ref = (
-                self._last_frame_time
-                if self._last_frame_time is not None
-                else self._connect_time
-            )
+            ref = self._last_frame_time if self._last_frame_time is not None else self._connect_time
             elapsed = time.time() - ref
 
             if elapsed <= self._NO_IMAGE_TIMEOUT:
                 continue
 
-            self.logger.warning(
-                f"No images for {elapsed:.0f}s — reconnecting to restart GAP8 streaming..."
-            )
+            self.logger.warning(f"No images for {elapsed:.0f}s — reconnecting to restart GAP8 streaming...")
             self._reconnecting = True
             try:
                 # Close dead link so _startup_link_reset starts clean
@@ -315,7 +302,7 @@ class WifiNode(Node):
                 # 60 s covers the full ESP32 boot + AP-up sequence.
                 deadline = time.time() + 60.0
                 while self.running and time.time() < deadline:
-                    if WifiNode.check_connection():
+                    if WifiNode._check_connection():
                         break
                     self.logger.info("Watchdog: waiting for drone WiFi...")
                     time.sleep(3.0)
@@ -323,17 +310,13 @@ class WifiNode(Node):
                 if not self.running:
                     return
 
-                if not WifiNode.check_connection():
-                    self.logger.warning(
-                        "Drone unreachable after 60s — will retry"
-                    )
+                if not WifiNode._check_connection():
+                    self.logger.warning("Drone unreachable after 60s — will retry")
                 else:
-                    # _startup_link_reset: close + 1.5s + reopen, triggers GAP8
+                    # _startup_link_reset: close → TCP ping → cflib reopen, triggers GAP8
                     if self._startup_link_reset():
                         self._prewarm_cpx_queue()
-                        self.logger.info(
-                            "Watchdog reconnect successful — waiting for images..."
-                        )
+                        self.logger.info("Watchdog reconnect successful — waiting for images...")
                     else:
                         self.logger.warning("Watchdog reconnect failed, will retry")
             except Exception as e:
@@ -351,21 +334,18 @@ class WifiNode(Node):
             try:
                 sample = self.telemetry_port.publisher.loan_uninit()
                 payload = sample.payload().contents
-                payload.fps = self.fps_counter.fps
-                if self.sim:
+                payload.fps = self._fps_counter.fps
+                if self._sim:
                     payload.status = AppStatus.SIMULATING
+                elif self._reconnecting:
+                    payload.status = AppStatus.RECONNECTING
+                elif hasattr(self, "cf") and self.cf is not None and self.cf.is_connected():
+                    payload.status = AppStatus.CONNECTED
                 else:
-                    if (
-                        hasattr(self, "cf")
-                        and self.cf is not None
-                        and self.cf.is_connected()
-                    ):
-                        payload.status = AppStatus.CONNECTED
-                    else:
-                        payload.status = AppStatus.DISCONNECTED
+                    payload.status = AppStatus.DISCONNECTED
 
                 # Drone state — synthetic in sim, cflib log subsystem when connected
-                if self.sim:
+                if self._sim:
                     self._update_sim_drone_state()
                 with self._drone_state_lock:
                     state = dict(self._drone_state)
@@ -379,17 +359,15 @@ class WifiNode(Node):
                 payload.roll = state.get("stateEstimate.roll", 0.0)
                 payload.pitch = state.get("stateEstimate.pitch", 0.0)
                 payload.yaw = state.get("stateEstimate.yaw", 0.0)
-                payload.m1 = state.get("motor.m1", 0)
-                payload.m2 = state.get("motor.m2", 0)
-                payload.m3 = state.get("motor.m3", 0)
-                payload.m4 = state.get("motor.m4", 0)
+                payload.m1 = round(state.get("motor.m1", 0) / _MOTOR_PWM_MAX * 100)
+                payload.m2 = round(state.get("motor.m2", 0) / _MOTOR_PWM_MAX * 100)
+                payload.m3 = round(state.get("motor.m3", 0) / _MOTOR_PWM_MAX * 100)
+                payload.m4 = round(state.get("motor.m4", 0) / _MOTOR_PWM_MAX * 100)
                 payload.vbat = state.get("pm.vbat", 0.0)
 
                 sample.assume_init().send()
                 try:
-                    self.telemetry_port.notifier.notify_with_custom_event_id(
-                        self.telemetry_port.event
-                    )
+                    self.telemetry_port.notifier.notify_with_custom_event_id(self.telemetry_port.event)
                 except Exception:
                     # Listener may have disconnected — not an error
                     pass
@@ -404,9 +382,7 @@ class WifiNode(Node):
     def _action_loop(self) -> None:
         self.logger.info("Action loop started")
         flying = False
-        unlocking = (
-            0  # countdown: sends thrust=0 packets before first hover setpoint (~500 ms)
-        )
+        unlocking = 0  # countdown: sends thrust=0 packets before first hover setpoint (~500 ms)
         hover = [0.0, 0.0, 0.0, DEFAULT_HEIGHT]  # vx, vy, yawrate, zdist
         flight_state = FlightState.IDLE
         motor_test_thrust = 0
@@ -444,23 +420,27 @@ class WifiNode(Node):
                                 self.logger.info(f"Taking off to z={hover[3]:.2f}m")
                                 flying = True
                                 unlocking = _UNLOCK_PACKETS
+                                if self._sim:
+                                    self._sim_flight_start = time.time()
 
                         case FlightCommand.LAND:
                             if flying:
-                                try:
-                                    self.cf.commander.send_stop_setpoint()
-                                except Exception as e:
-                                    self.logger.warning(f"Land stop error: {e}")
+                                if not self._sim:
+                                    try:
+                                        self.cf.commander.send_stop_setpoint()
+                                    except Exception as e:
+                                        self.logger.warning(f"Land stop error: {e}")
                                 flying = False
                                 unlocking = 0
                                 self.logger.info("Motors stopped — landed")
 
                         case FlightCommand.EMERGENCY_STOP:
                             self.logger.warning("EMERGENCY STOP — cutting motors")
-                            try:
-                                self.cf.commander.send_stop_setpoint()
-                            except Exception as e:
-                                self.logger.error(f"Emergency stop error: {e}")
+                            if not self._sim:
+                                try:
+                                    self.cf.commander.send_stop_setpoint()
+                                except Exception as e:
+                                    self.logger.error(f"Emergency stop error: {e}")
                             flying = False
                             unlocking = 0
                             flight_state = FlightState.IDLE
@@ -468,6 +448,13 @@ class WifiNode(Node):
 
                         case FlightCommand.MOTOR_TEST:
                             self.logger.info("Motor test — spinning motors")
+
+            # In sim: sync state for _update_sim_drone_state, skip CF commander calls
+            if self._sim:
+                self._sim_flying = flying
+                self._sim_hover_z = hover[3]
+                time.sleep(_LOOP_INTERVAL)
+                continue
 
             if self._reconnecting:
                 # Link is dead — skip all sends to avoid Broken pipe spam
@@ -502,7 +489,7 @@ class WifiNode(Node):
             time.sleep(_LOOP_INTERVAL)
 
         # Ensure motors stop on exit
-        if flying:
+        if flying and not self._sim:
             try:
                 self.cf.commander.send_stop_setpoint()
             except Exception:
@@ -537,34 +524,49 @@ class WifiNode(Node):
         self.logger.info(f"Crazyflie connected: {uri}")
         self._cf_connected.set()
 
-    def _setup_log_subsystem(self) -> None:
-        """Subscribe to Crazyflie log variables at 10 Hz (state estimate, motors, battery)."""
+    def _setup_log_subsystem(self, suffix: str = "") -> None:
+        """Subscribe to Crazyflie log variables at 10 Hz (state estimate, motors, battery).
+
+        suffix: appended to config names to avoid duplicate-name errors on retry.
+        """
 
         def _log_cb(timestamp, data, logconf):
             with self._drone_state_lock:
                 self._drone_state.update(data)
 
         configs = [
-            ("state_pos_vel", 100, [
-                ("stateEstimate.x", "float"),
-                ("stateEstimate.y", "float"),
-                ("stateEstimate.z", "float"),
-                ("stateEstimate.vx", "float"),
-                ("stateEstimate.vy", "float"),
-                ("stateEstimate.vz", "float"),
-            ]),
-            ("state_att_batt", 100, [
-                ("stateEstimate.roll", "float"),
-                ("stateEstimate.pitch", "float"),
-                ("stateEstimate.yaw", "float"),
-                ("pm.vbat", "float"),
-            ]),
-            ("motors", 100, [
-                ("motor.m1", "uint16_t"),
-                ("motor.m2", "uint16_t"),
-                ("motor.m3", "uint16_t"),
-                ("motor.m4", "uint16_t"),
-            ]),
+            (
+                f"state_pos_vel{suffix}",
+                100,
+                [
+                    ("stateEstimate.x", "float"),
+                    ("stateEstimate.y", "float"),
+                    ("stateEstimate.z", "float"),
+                    ("stateEstimate.vx", "float"),
+                    ("stateEstimate.vy", "float"),
+                    ("stateEstimate.vz", "float"),
+                ],
+            ),
+            (
+                f"state_att_batt{suffix}",
+                100,
+                [
+                    ("stateEstimate.roll", "float"),
+                    ("stateEstimate.pitch", "float"),
+                    ("stateEstimate.yaw", "float"),
+                    ("pm.vbat", "float"),
+                ],
+            ),
+            (
+                f"motors{suffix}",
+                100,
+                [
+                    ("motor.m1", "uint16_t"),
+                    ("motor.m2", "uint16_t"),
+                    ("motor.m3", "uint16_t"),
+                    ("motor.m4", "uint16_t"),
+                ],
+            ),
         ]
 
         for name, period_ms, variables in configs:
@@ -574,11 +576,7 @@ class WifiNode(Node):
                     lc.add_variable(var_name, var_type)
                 self.cf.log.add_config(lc)
                 lc.data_received_cb.add_callback(_log_cb)
-                lc.error_cb.add_callback(
-                    lambda conf, msg: self.logger.warning(
-                        f"Log error [{conf.name}]: {msg}"
-                    )
-                )
+                lc.error_cb.add_callback(lambda conf, msg: self.logger.warning(f"Log error [{conf.name}]: {msg}"))
                 lc.start()
                 self.logger.info(f"Log config '{name}' started")
             except Exception as e:
@@ -596,34 +594,32 @@ class WifiNode(Node):
     # --- Connection ---
 
     def _startup_link_reset(self) -> bool:
-        """Close link immediately after first connect and reopen.
+        """Close link, send a TCP ping as GAP8's first WIFI_CTRL(connected),
+        then reconnect cflib as the reliable second notification.
 
-        GAP8's camera_task does not reliably start streaming on the FIRST
-        WIFI_CTRL(connected) notification it receives after boot.  Closing and
-        reopening the TCP link causes ESP32 to send a SECOND WIFI_CTRL(connected)
-        to GAP8, which reliably kicks the streaming pipeline.
+        When cflib itself does close+reopen the link, the ESP32 firmware
+        immediately accepts then drops the new CPX connection (brief disconnect)
+        because the old CPX session's cleanup is still in-flight.  GAP8 ends up
+        receiving connected+disconnected → stops streaming.
 
-        This is safe to call unconditionally:
-        - If Python already connected in the first ~2 s of ESP32 boot, the extra
-          close/open adds only ~1.5 s of startup delay but still works correctly.
-        - If ESP32 has been running for 14+ s before Python connects (the common
-          failure mode) this reset is required for streaming to work at all.
+        Using a bare-TCP ping (no CPX/CRTP) as the first touch avoids the
+        CPX-level state machine conflict.  By the time cflib reconnects the ESP32
+        is idle and accepts the connection cleanly — GAP8 gets only "connected".
 
-        Returns True if the reset succeeded, False otherwise (streaming may
-        still start via the watchdog on a subsequent reconnect).
+        Returns True if cflib reconnected, False on timeout.
         """
         self.logger.info("Startup link reset — re-triggering GAP8 streaming...")
         try:
             self.cf.close_link()
             self._cf_connected.clear()
-            time.sleep(1.5)
+            time.sleep(1.0)  # let cflib CPX session close fully on ESP32
+            WifiNode._tcp_ping()  # first WIFI_CTRL(connected) to GAP8
+            time.sleep(1.5)  # let ping socket clear before cflib reconnects
             self.cf.open_link(CRAZYFLIE_URI)
             if self._cf_connected.wait(timeout=10.0) and self.cf.is_connected():
                 self.logger.info("Startup link reset complete")
                 return True
-            self.logger.warning(
-                "Startup link reset reconnect timed out — proceeding without reset"
-            )
+            self.logger.warning("Startup link reset reconnect timed out — proceeding without reset")
             return False
         except Exception as e:
             self.logger.error(f"Startup link reset error: {e}")
@@ -646,22 +642,38 @@ class WifiNode(Node):
             except queue.Empty:
                 break
         if drained:
-            self.logger.info(
-                f"CPX APP queue pre-registered (drained {drained} stale packet(s))"
-            )
+            self.logger.info(f"CPX APP queue pre-registered (drained {drained} stale packet(s))")
         else:
             self.logger.info("CPX APP queue pre-registered (empty)")
 
     @staticmethod
-    def check_connection(host=CRAZYFLIE_IP):
+    def _tcp_ping(hold_secs: float = 0.3) -> None:
+        """Open a bare TCP connection to the drone, hold briefly, then close.
+
+        This sends WIFI_CTRL_STATUS_CLIENT_CONNECTED to GAP8 via the ESP32
+        firmware without any CPX/CRTP overhead.  GAP8's camera_task does not
+        stream reliably on its FIRST such notification after boot; using this
+        ping as the "first connect" makes cflib's subsequent open_link() the
+        reliable second notification.
+
+        Fails silently — caller proceeds regardless.
+        """
+        try:
+            import socket as _socket
+
+            s = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+            s.settimeout(3.0)
+            s.connect((CRAZYFLIE_IP, CRAZYFLIE_PORT))
+            time.sleep(hold_secs)
+            s.close()
+        except Exception:
+            pass
+
+    @staticmethod
+    def _check_connection(host=CRAZYFLIE_IP):
         param = "-n" if platform.system().lower() == "windows" else "-c"
         command = ["ping", param, "1", "-W", "1", host]
-        return (
-            subprocess.call(
-                command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-            )
-            == 0
-        )
+        return subprocess.call(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0
 
     def _check_required_decks(self) -> bool:
         """Verify AI-deck and Flow2 are attached by polling params.
@@ -683,14 +695,12 @@ class WifiNode(Node):
             if decks_status["bcFlow2"] and decks_status["bcAI"]:
                 decks_event.set()
 
-        self.cf.param.add_update_callback(
-            group="deck", name="bcFlow2", cb=_deck_cb_flow
-        )
+        self.cf.param.add_update_callback(group="deck", name="bcFlow2", cb=_deck_cb_flow)
         self.cf.param.add_update_callback(group="deck", name="bcAI", cb=_deck_cb_ai)
         self.cf.param.request_param_update("deck.bcFlow2")
         self.cf.param.request_param_update("deck.bcAI")
 
-        if not decks_event.wait(timeout=5.0):
+        if not decks_event.wait(timeout=10.0):
             if not self.cf.is_connected():
                 self.logger.error("Deck check timed out — connection dropped during handshake")
             else:
@@ -705,13 +715,12 @@ class WifiNode(Node):
 
         Returns True if connected, False if self.running became False.
         """
+        WifiNode._patch_cflib()
         cflib.crtp.init_drivers()
         self.cf = Crazyflie(rw_cache="./data/cache")
 
         # Disable parameter flood to save bandwidth for images
-        self.cf.param.request_update_of_all_params = lambda: self.logger.info(
-            "Parameter flood disabled"
-        )
+        self.cf.param.request_update_of_all_params = lambda: self.logger.info("Parameter flood disabled")
 
         self.cf.connected.add_callback(self._on_connected)
         self.cf.connection_failed.add_callback(self._on_connection_failed)
@@ -743,28 +752,28 @@ class WifiNode(Node):
     def _update_sim_drone_state(self) -> None:
         """Populate _drone_state with synthetic flight data for sim mode.
 
-        Simulates a slow takeoff to 0.5 m, gentle oscillating position/attitude,
-        slow yaw rotation, slightly varying motor PWM, and a draining battery.
+        Simulates takeoff/landing based on _sim_flying, gentle oscillating
+        position/attitude, slow yaw rotation, slightly varying motor PWM,
+        and a draining battery.
         """
         t = time.time() - self._sim_start_time
 
-        # Position — gentle x/y sway, z rises to 0.5 m in ~5 s
-        z_frac = min(t / 5.0, 1.0)
+        # z rises to hover height over 5 s from takeoff; before first takeoff
+        # command use elapsed sim time so telemetry is live from the start.
+        if self._sim_flying:
+            t_fly = time.time() - self._sim_flight_start
+        else:
+            t_fly = t  # simulate always-airborne until first real command
+        z_frac = min(t_fly / 5.0, 1.0)
+        z = self._sim_hover_z * z_frac
+        vz = self._sim_hover_z * 0.2 * (1.0 - z_frac)
         x = 0.10 * math.sin(t * 0.5)
         y = 0.05 * math.sin(t * 0.3 + 0.5)
-        z = 0.5 * z_frac
-
-        # Velocity — analytic derivatives of position
         vx = 0.05 * math.cos(t * 0.5)
         vy = 0.015 * math.cos(t * 0.3 + 0.5)
-        vz = 0.1 * (1.0 - z_frac)  # zero once at cruise altitude
-
-        # Attitude — small roll/pitch oscillations, slow 5 °/s yaw
         roll = 2.0 * math.sin(t * 0.5)
         pitch = 1.5 * math.sin(t * 0.3 + 1.0)
         yaw = ((t * 5.0) % 360.0) - 180.0
-
-        # Motors — base PWM proportional to z, small per-motor noise
         base_pwm = int(20000 + 12000 * z_frac)
         m1 = base_pwm + random.randint(-300, 300)
         m2 = base_pwm + random.randint(-300, 300)
@@ -797,116 +806,108 @@ class WifiNode(Node):
         _y = np.arange(IMAGE_HEIGHT, dtype=np.uint16).reshape(-1, 1)
         _x = np.arange(IMAGE_WIDTH, dtype=np.uint16).reshape(1, -1)
         threading.Thread(target=self._telemetry_loop, daemon=True).start()
+        threading.Thread(target=self._action_loop, daemon=True).start()
         while self.running:
             self.node.wait(iceoryx2.Duration.from_millis(100))
             if not self.running:
                 break
-            sample = self.image_port.publisher.loan_uninit()
-            payload = sample.payload().contents
-            payload.id = self._frame_id
-            payload.timestamp = int(time.time() * 1000)
-            image = np.ctypeslib.as_array(payload.pixels).reshape(
-                IMAGE_HEIGHT, IMAGE_WIDTH
-            )
-            _fill_sim_frame(image, self._frame_id, _y, _x)
-            self._frame_id += 1
-            sample.assume_init().send()
-            self.fps_counter.update()
-            self.logger.debug(f"FPS: {self.fps_counter.fps:.1f}")
-            self.image_port.notifier.notify_with_custom_event_id(self.image_port.event)
+            try:
+                sample, payload = self._loan_image_sample()
+                image = np.ctypeslib.as_array(payload.pixels).reshape(IMAGE_HEIGHT, IMAGE_WIDTH)
+                _fill_sim_frame(image, self._frame_id, _y, _x)
+                self._commit_image_sample(sample)
+            except Exception as e:
+                self.logger.error(f"Sim frame error: {e}")
+
+    # --- Hardware startup ---
+
+    def _startup_hardware(self) -> bool:
+        """Wait for network, connect CF, and start all hardware threads.
+
+        Returns True on success, False if startup failed or node was stopped.
+        """
+        self.logger.info(f"Waiting for network connectivity to {CRAZYFLIE_IP}...")
+        while self.running and not WifiNode._check_connection():
+            self.node.wait(iceoryx2.Duration.from_secs(5))
+
+        if not self.running:
+            return False
+
+        # TCP ping: send GAP8's first WIFI_CTRL(connected) via a bare TCP socket,
+        # then connect cflib as the reliable second notification.  When cflib
+        # itself does the close+reopen the ESP32 briefly accepts then drops the
+        # new CPX connection (firmware bug), leaving GAP8 in "disconnected" state.
+        # A raw TCP ping has no CPX overhead, so the ESP32 state machine stays
+        # clean for cflib's subsequent connect.
+        self.logger.info("TCP ping — priming GAP8 for second WIFI_CTRL(connected)...")
+        WifiNode._tcp_ping()
+        time.sleep(2.0)  # let ping socket clear on ESP32 before cflib opens
+
+        if not self._connect_cf():
+            return False
+
+        # 1 s delay: with TOC and params cached, cflib connects fast (~876 ms)
+        # and LOG_START arrives before the drone's CRTP stack finishes
+        # its post-connect init.  The drone silently drops it → no LOG_DATA.
+        # A short pause eliminates this race.
+        time.sleep(1.0)
+        self._setup_log_subsystem()
+
+        # Verify LOG_DATA is actually flowing (pm.vbat is always >0 on a live drone).
+        # If still zero after 2 s, drone silently dropped LOG_START — retry once.
+        _log_deadline = time.time() + 2.0
+        while time.time() < _log_deadline:
+            with self._drone_state_lock:
+                if self._drone_state.get("pm.vbat", 0.0) != 0.0:
+                    break
+            time.sleep(0.1)
+        else:
+            self.logger.warning("LOG_DATA not received after 2s — retrying log setup")
+            self._setup_log_subsystem(suffix="_r1")
+
+        # Pre-register CPX APP queue immediately.  GAP8 starts streaming
+        # ~800 ms before cflib fires _on_connected; any APP packet that
+        # arrives before the queue exists is silently dropped by cflib's
+        # CPX router.  Registering here — right after the connection is
+        # confirmed — ensures no early frames are lost.
+        self._prewarm_cpx_queue()
+
+        # Start image reception immediately so queued frames are consumed
+        # while deck detection runs in parallel.
+        threading.Thread(target=self._receive_images, daemon=True).start()
+
+        if not self._check_required_decks():
+            self.logger.error("Startup aborted — required decks not confirmed")
+            self.running = False
+            return False
+
+        self._connect_time = time.time()
+
+        threading.Thread(target=self._action_loop, daemon=True).start()
+        threading.Thread(target=self._telemetry_loop, daemon=True).start()
+        threading.Thread(target=self._image_watchdog, daemon=True).start()
+
+        self.logger.info("Node fully operational, receiving frames and commands...")
+        return True
 
     # --- Entry point ---
 
     def run(self):
         try:
             # INITIALIZE ICEORYX2
-            self.image_port = self.create_publisher(
-                ServiceName.IMAGE, ImageData, EventId.IMAGE_READY
-            )
-            self.telemetry_port = self.create_publisher(
-                ServiceName.TELEMETRY, TelemetryData, EventId.TELEMETRY_READY
-            )
-
-            self.action_port = self.create_subscriber(
-                ServiceName.ACTION, ActionData, EventId.ACTION_READY
-            )
+            self.image_port = self.create_publisher(ServiceName.IMAGE, ImageData, EventId.IMAGE_READY)
+            self.telemetry_port = self.create_publisher(ServiceName.TELEMETRY, TelemetryData, EventId.TELEMETRY_READY)
+            self.action_port = self.create_subscriber(ServiceName.ACTION, ActionData, EventId.ACTION_READY)
 
             if self.action_port is None or self.action_port.subscriber is None:
                 self.logger.error("Failed to create action subscriber")
                 return
 
-            if self.sim:
+            if self._sim:
                 self._run_sim()
             else:
-                self.logger.info(
-                    f"Waiting for network connectivity to {CRAZYFLIE_IP}..."
-                )
-                while self.running and not WifiNode.check_connection():
-                    self.node.wait(iceoryx2.Duration.from_secs(5))
-
-                if not self.running:
+                if not self._startup_hardware():
                     return
-
-                # CONNECT TO CRAZYFLIE
-                if not self._connect_cf():
-                    return
-
-                # Startup link reset: close immediately and reopen to send GAP8 a
-                # second WIFI_CTRL(connected).  GAP8's camera_task does not stream
-                # reliably on the first such notification after boot; the second one
-                # consistently kicks the pipeline.  The ~1.5 s overhead is worth it.
-                self._startup_link_reset()
-
-                # Link reset may time out if GAP8 CPX traffic floods the CRTP
-                # channel during TOC download.  Wait up to another 20 s for
-                # cflib to finish connecting before calling deck check or any
-                # other CF API — param/log ops crash (struct.error) when TOC
-                # is not yet available.
-                if not self.cf.is_connected():
-                    self.logger.warning(
-                        "CF not connected after link reset, waiting up to 20 s..."
-                    )
-                    self._cf_connected.wait(timeout=20.0)
-                    if not self.cf.is_connected():
-                        self.logger.error(
-                            "CF failed to reconnect after link reset — exiting"
-                        )
-                        return
-
-                # Start log subsystem now — stable second connection is confirmed.
-                # Intentionally NOT started in _on_connected to avoid sending log
-                # traffic on the first (reset) connection, which would congest the
-                # shared TCP channel and delay the second CRTP TOC download.
-                self._setup_log_subsystem()
-
-                # Pre-register CPX APP queue immediately.  GAP8 starts streaming
-                # ~800 ms before cflib fires _on_connected; any APP packet that
-                # arrives before the queue exists is silently dropped by cflib's
-                # CPX router.  Registering here — right after the connection is
-                # confirmed — ensures no early frames are lost.
-                self._prewarm_cpx_queue()
-
-                # Start image reception immediately so queued frames are consumed
-                # while deck detection runs in parallel.
-                threading.Thread(target=self._receive_images, daemon=True).start()
-
-                # Check if AI-deck and Flow2 decks are attached
-                if not self._check_required_decks():
-                    self.running = False
-                    return
-
-                self._connect_time = time.time()
-
-                # START REMAINING BACKGROUND THREADS
-                threading.Thread(target=self._action_loop, daemon=True).start()
-                threading.Thread(target=self._telemetry_loop, daemon=True).start()
-                threading.Thread(target=self._image_watchdog, daemon=True).start()
-
-                self.logger.info(
-                    "Node fully operational, receiving frames and commands..."
-                )
-
-                # Main loop: just keep the process alive.
                 while self.running:
                     time.sleep(0.5)
 
@@ -920,7 +921,7 @@ class WifiNode(Node):
             self.logger.error(f"WifiNode error: {e}")
         finally:
             self.running = False
-            if not self.sim and hasattr(self, "cf"):
+            if not self._sim and hasattr(self, "cf"):
                 try:
                     self.cf.commander.send_stop_setpoint()
                     self.cf.close_link()

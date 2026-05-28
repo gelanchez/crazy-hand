@@ -83,7 +83,7 @@ class TelemetryData(ctypes.Structure):
         ("roll", ctypes.c_float),  # attitude deg
         ("pitch", ctypes.c_float),
         ("yaw", ctypes.c_float),
-        # Motor PWM (0–65535)
+        # Motor (0–100 %)
         ("m1", ctypes.c_uint16),
         ("m2", ctypes.c_uint16),
         ("m3", ctypes.c_uint16),

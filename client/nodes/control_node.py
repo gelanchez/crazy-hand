@@ -32,6 +32,7 @@ from client.common.constants import (
     ServiceName,
 )
 from client.common.node import Node
+from client.common.utils import EMAFilter
 from client.common.payloads import ActionData, CommandData, PerceptionData
 
 NODE_NAME = "control_node"
@@ -50,9 +51,9 @@ class ControlNode(Node):
             "zdistance": DEFAULT_HEIGHT,
         }
 
-        # EMA state for hand position
-        self._ema_x: float | None = None
-        self._ema_y: float | None = None
+        # EMA (Exponential Moving Average) — smooths jittery hand pixel coords before mapping to velocity
+        self._ema_x = EMAFilter(TRACKING_EMA_ALPHA)
+        self._ema_y = EMAFilter(TRACKING_EMA_ALPHA)
 
         # Detection-loss debounce
         self._no_hand_frames: int = 0
@@ -63,17 +64,6 @@ class ControlNode(Node):
         # Motor test state
         self._motor_test_end: float = 0.0
         self._thrust: int = 0
-
-    def _update_ema(self, x: int, y: int) -> tuple[float, float]:
-        """Apply EMA smoothing to raw hand position. Returns filtered (x, y)."""
-        if self._ema_x is None:
-            # First sample — seed with raw value
-            self._ema_x = float(x)
-            self._ema_y = float(y)
-        else:
-            self._ema_x = TRACKING_EMA_ALPHA * x + (1.0 - TRACKING_EMA_ALPHA) * self._ema_x
-            self._ema_y = TRACKING_EMA_ALPHA * y + (1.0 - TRACKING_EMA_ALPHA) * self._ema_y
-        return self._ema_x, self._ema_y
 
     def _handle_gesture(self, perception):
         if not perception.hand_detected:
@@ -97,8 +87,8 @@ class ControlNode(Node):
             self._no_hand_frames += 1
             if self._no_hand_frames >= TRACKING_LOSS_FRAMES:
                 # Hand truly lost — stop motion and reset EMA
-                self._ema_x = None
-                self._ema_y = None
+                self._ema_x.reset()
+                self._ema_y.reset()
                 self._hover["vx"] = 0.0
                 self._hover["vy"] = 0.0
                 self._publish_action(ActionSource.TRACKING)
@@ -108,7 +98,8 @@ class ControlNode(Node):
         # Hand present — reset loss counter
         self._no_hand_frames = 0
 
-        filtered_x, filtered_y = self._update_ema(perception.hand_x, perception.hand_y)
+        filtered_x = self._ema_x.update(perception.hand_x)
+        filtered_y = self._ema_y.update(perception.hand_y)
 
         # Error from frame centre (positive = right / below centre)
         error_x = filtered_x - IMAGE_WIDTH / 2
@@ -200,8 +191,8 @@ class ControlNode(Node):
                 self._hover["yawrate"],
                 self._hover["zdistance"],
             )
-            p.ema_x = self._ema_x if self._ema_x is not None else 0.0
-            p.ema_y = self._ema_y if self._ema_y is not None else 0.0
+            p.ema_x = self._ema_x.value or 0.0
+            p.ema_y = self._ema_y.value or 0.0
             p.thrust = self._thrust
             cmd_name = self._flight_command.name
             sample.assume_init().send()
@@ -284,8 +275,8 @@ class ControlNode(Node):
                         self._hover["vx"] = 0.0
                         self._hover["vy"] = 0.0
                         self._no_hand_frames = 0
-                        self._ema_x = None
-                        self._ema_y = None
+                        self._ema_x.reset()
+                        self._ema_y.reset()
                         self.logger.info("TRACKING mode OFF")
                         changed = True
 
@@ -347,7 +338,7 @@ class ControlNode(Node):
             self._publish_action()
 
     def run(self):
-        self.logger.info(f"{self.name} running")
+        self.logger.info(f"{NODE_NAME} running")
 
         self.command_port = self.create_subscriber(ServiceName.COMMAND, CommandData, EventId.COMMAND_READY)
         self.perception_port = self.create_subscriber(ServiceName.PERCEPTION, PerceptionData, EventId.PERCEPTION_READY)
@@ -405,7 +396,7 @@ class ControlNode(Node):
         except Exception as e:
             self.logger.error(f"ControlNode error: {e}", exc_info=True)
         finally:
-            self.logger.info(f"{self.name} shut down")
+            self.logger.info(f"{NODE_NAME} shut down")
 
 
 def main():

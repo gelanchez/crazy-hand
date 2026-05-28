@@ -43,7 +43,7 @@ class TelemetrySample:
     roll: float = 0.0  # attitude deg
     pitch: float = 0.0
     yaw: float = 0.0
-    # Motor PWM (0–65535)
+    # Motor (0–100 %)
     m1: int = 0
     m2: int = 0
     m3: int = 0
