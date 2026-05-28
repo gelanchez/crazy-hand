@@ -20,6 +20,7 @@ from client.common.constants import (
     EventId,
     FlightCommand,
     FlightState,
+    ImageFormat,
     ServiceName,
 )
 from client.common.database import (
@@ -94,7 +95,8 @@ class LoggerNode(Node):
             if self._get_save_images():
                 data = sample.payload()
                 pixels_bytes = bytes(data.contents.pixels)
-                image_name = f"{data.contents.timestamp}.png"
+                ext = "jpg" if data.contents.format == ImageFormat.JPEG else "png"
+                image_name = f"{data.contents.timestamp}.{ext}"
                 del data
                 self._enqueue_save(pixels_bytes, IMAGES_PATH / image_name)
             del sample
@@ -187,7 +189,8 @@ class LoggerNode(Node):
 
             if self._get_save_images():
                 processed_bytes = bytes(data.contents.processed_pixels)
-                proc_name = f"{data.contents.timestamp}.png"
+                ext = "jpg" if data.contents.format == ImageFormat.JPEG else "png"
+                proc_name = f"{data.contents.timestamp}.{ext}"
                 self._enqueue_save(
                     processed_bytes,
                     PROCESSED_IMAGES_PATH / proc_name,

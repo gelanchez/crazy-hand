@@ -1,6 +1,6 @@
 import ctypes
 
-from client.common.constants import IMAGE_SIZE, AppStatus, FlightCommand
+from client.common.constants import IMAGE_SIZE, AppStatus, FlightCommand, ImageFormat
 
 
 class ActionData(ctypes.Structure):
@@ -41,11 +41,13 @@ class ImageData(ctypes.Structure):
     _fields_ = [
         ("id", ctypes.c_uint64),
         ("timestamp", ctypes.c_uint64),
+        ("format", ctypes.c_uint8),  # ImageFormat: 0=RAW, 1=JPEG
         ("pixels", ctypes.c_ubyte * IMAGE_SIZE),
     ]
 
     def __str__(self) -> str:
-        return f"ImageData(id={self.id}, timestamp={self.timestamp}, size={len(self.pixels)})"
+        fmt = ImageFormat(self.format).name if self.format in ImageFormat._value2member_map_ else self.format
+        return f"ImageData(id={self.id}, timestamp={self.timestamp}, format={fmt})"
 
 
 GESTURE_NAME_SIZE = 32
@@ -55,6 +57,7 @@ class PerceptionData(ctypes.Structure):
     _fields_ = [
         ("id", ctypes.c_uint64),
         ("timestamp", ctypes.c_uint64),
+        ("format", ctypes.c_uint8),  # ImageFormat: propagated from ImageData
         ("hand_detected", ctypes.c_bool),
         ("hand_x", ctypes.c_uint16),
         ("hand_y", ctypes.c_uint16),

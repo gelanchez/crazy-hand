@@ -172,6 +172,7 @@ class VisionNode(Node):
                     raw_ptr = payload.contents.pixels
                     img_id = payload.contents.id
                     img_timestamp = payload.contents.timestamp
+                    img_format = payload.contents.format
 
                     pixels = (
                         np
@@ -282,6 +283,7 @@ class VisionNode(Node):
                     data = perc_sample.payload()
                     data.contents.id = img_id
                     data.contents.timestamp = img_timestamp
+                    data.contents.format = img_format
 
                     if results.hand_landmarks:
                         data.contents.hand_detected = True

@@ -31,6 +31,7 @@ from client.common.constants import (
     EventId,
     FlightCommand,
     FlightState,
+    ImageFormat,
     ServiceName,
 )
 from client.common.node import Node
@@ -265,6 +266,7 @@ class WifiNode(Node):
                 return
         try:
             sample, payload = self._loan_image_sample()
+            payload.format = int(ImageFormat.JPEG if fmt == 1 else ImageFormat.RAW)
             ctypes.memmove(payload.pixels, frame_data, min(len(frame_data), IMAGE_SIZE))
             self._commit_image_sample(sample)
         except Exception as e:
@@ -814,6 +816,7 @@ class WifiNode(Node):
                 break
             try:
                 sample, payload = self._loan_image_sample()
+                payload.format = int(ImageFormat.RAW)
                 image = np.ctypeslib.as_array(payload.pixels).reshape(IMAGE_HEIGHT, IMAGE_WIDTH)
                 _fill_sim_frame(image, self._frame_id, _y, _x)
                 self._commit_image_sample(sample)
