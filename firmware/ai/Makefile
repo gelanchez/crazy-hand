@@ -39,9 +39,14 @@ APP_CFLAGS 		+= -DQVGA_MODE # QVGA format (324x244)
 
 #! Choose encoding here
 # Image encoding
-APP_CFLAGS 		+= -DRAW_ENCODING
-# APP_CFLAGS		+= -DJPEG_ENCODING
+# APP_CFLAGS 		+= -DRAW_ENCODING
+APP_CFLAGS		+= -DJPEG_ENCODING
 CONFIG_GAP_LIB_JPEG = 1
+
+#! Choose JPEG quality (only applies when JPEG_ENCODING is set)
+# Default is quality 50 (no flag). Valid options: JPEG_Q_0/10/20/50/90/95/100
+# Lower = smaller files, higher FPS; higher = better image quality, lower FPS
+# APP_CFLAGS		+= -DJPEG_Q_20
 
 # Linker flags
 APP_LDFLAGS     =

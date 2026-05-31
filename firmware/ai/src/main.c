@@ -41,6 +41,12 @@ static pi_task_t g_task;
 
 #ifdef JPEG_ENCODING
 static pi_buffer_t g_jpeg_buffer;
+static jpeg_encoder_t g_jpeg_encoder;
+static pi_buffer_t    g_jpeg_header;
+static pi_buffer_t    g_jpeg_footer;
+static pi_buffer_t    g_jpeg_data;
+static uint32_t       g_jpeg_header_size;
+static uint32_t       g_jpeg_footer_size;
 #endif
 
 static void image_capture_done_cb(void *arg) {
@@ -89,49 +95,11 @@ void camera_task(void *parameters) {
     cpxPrintToConsole(LOG_TO_CRTP, "[INFO] Initialized image buffer\n");
 
 #ifdef JPEG_ENCODING
-    // Can we move the JPEG encoding to the cluster?
-    jpeg_encoder_t jpeg_encoder;
-    struct jpeg_encoder_conf encoder_conf;
-    jpeg_encoder_conf_init(&encoder_conf);
-    encoder_conf.width = IMG_WIDTH;
-    encoder_conf.height = IMG_HEIGHT;
-    encoder_conf.flags = 0; // Grayscale
-
-    if (jpeg_encoder_open(&jpeg_encoder, &encoder_conf)) {
-        cpxPrintToConsole(LOG_TO_CRTP, "[ERROR] Failed to initialize JPEG encoder\n");
-        return;
-    }
-
-    pi_buffer_t header;
-    uint32_t headerSize;
-    pi_buffer_t footer;
-    uint32_t footerSize;
-    pi_buffer_t jpeg_data;
-    uint32_t jpegSize;
-
-    // TODO Do it manually without additional functions
+    // Link capture buffer — encoder and JPEG buffers are initialised in run() before tasks start
     pi_buffer_init(&g_jpeg_buffer, PI_BUFFER_TYPE_L2, g_buff_img);
     pi_buffer_set_format(&g_jpeg_buffer, IMG_WIDTH, IMG_HEIGHT, 1,
                          PI_BUFFER_FORMAT_GRAY);
-
-    header.size = 1024;
-    header.data = pmsis_l2_malloc(1024);
-
-    footer.size = 10;
-    footer.data = pmsis_l2_malloc(10);
-
-    // This must fit the full encoded JPEG
-    jpeg_data.size = 1024 * 15;
-    jpeg_data.data = pmsis_l2_malloc(1024 * 15);
-
-    if (header.data == 0 || footer.data == 0 || jpeg_data.data == 0) {
-        cpxPrintToConsole(LOG_TO_CRTP,
-                          "[ERROR] Could not allocate memory for JPEG image\n");
-        return;
-    }
-
-    jpeg_encoder_header(&jpeg_encoder, &header, &headerSize);
-    jpeg_encoder_footer(&jpeg_encoder, &footer, &footerSize);
+    uint32_t jpegSize;
 #endif
 
     uint32_t imgSize = IMG_SIZE;
@@ -181,15 +149,16 @@ void camera_task(void *parameters) {
             start = xTaskGetTickCount();
 #if defined(JPEG_ENCODING)
             // JPEG ENCODE
-            jpeg_encoder_process(&jpeg_encoder, &g_jpeg_buffer, &jpeg_data,
+            jpeg_encoder_process(&g_jpeg_encoder, &g_jpeg_buffer, &g_jpeg_data,
                                  &jpegSize);
             encodeTime = xTaskGetTickCount() - start;
 
             // TRANSFER
             start = xTaskGetTickCount();
-            imgSize = headerSize + jpegSize + footerSize;
-            transferJpegImage(&g_txPacket, imgSize, jpeg_data.data, jpegSize,
-                              header.data, headerSize, footer.data, footerSize);
+            imgSize = g_jpeg_header_size + jpegSize + g_jpeg_footer_size;
+            transferJpegImage(&g_txPacket, imgSize, g_jpeg_data.data, jpegSize,
+                              g_jpeg_header.data, g_jpeg_header_size,
+                              g_jpeg_footer.data, g_jpeg_footer_size);
 #elif defined(RAW_ENCODING)
             // TRANSFER
             transferRawImage(&g_txPacket, imgSize, g_buff_img);
@@ -264,6 +233,37 @@ void run(void) {
 
     BaseType_t xTask;
 
+#ifdef JPEG_ENCODING
+    {
+        struct jpeg_encoder_conf enc_conf;
+        jpeg_encoder_conf_init(&enc_conf);
+        enc_conf.width  = IMG_WIDTH;
+        enc_conf.height = IMG_HEIGHT;
+        enc_conf.flags  = 0; // FC-only; pi_cluster_open broken in FreeRTOS context (all SDK attempts failed)
+
+        if (jpeg_encoder_open(&g_jpeg_encoder, &enc_conf)) {
+            cpxPrintToConsole(LOG_TO_CRTP, "[ERROR] Failed to open JPEG encoder\n");
+            pmsis_exit(-1);
+        }
+
+        g_jpeg_header.size = 1024;
+        g_jpeg_header.data = pmsis_l2_malloc(1024);
+        g_jpeg_footer.size = 10;
+        g_jpeg_footer.data = pmsis_l2_malloc(10);
+        g_jpeg_data.size   = 1024 * 15;
+        g_jpeg_data.data   = pmsis_l2_malloc(1024 * 15);
+
+        if (!g_jpeg_header.data || !g_jpeg_footer.data || !g_jpeg_data.data) {
+            cpxPrintToConsole(LOG_TO_CRTP, "[ERROR] JPEG buffer allocation failed\n");
+            pmsis_exit(-1);
+        }
+
+        jpeg_encoder_header(&g_jpeg_encoder, &g_jpeg_header, &g_jpeg_header_size);
+        jpeg_encoder_footer(&g_jpeg_encoder, &g_jpeg_footer, &g_jpeg_footer_size);
+        cpxPrintToConsole(LOG_TO_CRTP, "[INFO] JPEG encoder ready (FC-only)\n");
+    }
+#endif
+
     // LED_TASK
     xTask = xTaskCreate(led_task, "LED_TASK", configMINIMAL_STACK_SIZE * 2,
                         NULL, tskIDLE_PRIORITY + 1, NULL);
@@ -274,7 +274,7 @@ void run(void) {
 
     // CAMERA_TASK
     xTask =
-        xTaskCreate(camera_task, "CAMERA_TASK", configMINIMAL_STACK_SIZE * 4,
+        xTaskCreate(camera_task, "CAMERA_TASK", configMINIMAL_STACK_SIZE * 8,
                     NULL, tskIDLE_PRIORITY + 2, NULL);
     if (xTask != pdPASS) {
         cpxPrintToConsole(LOG_TO_CRTP, "[ERROR] CAMERA_TASK did not start!\n");

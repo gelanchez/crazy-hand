@@ -138,6 +138,19 @@ Output image:
 ai/BUILD/GAP8_V2/GCC_RISCV_FREERTOS/target.board.devices.flash.img
 ```
 
+#### Image encoding
+
+Controlled by flags in `firmware/ai/Makefile`. Default is JPEG. To switch to RAW:
+
+```makefile
+# Comment out JPEG, uncomment RAW:
+APP_CFLAGS += -DRAW_ENCODING
+# APP_CFLAGS += -DJPEG_ENCODING
+# CONFIG_GAP_LIB_JPEG = 1
+```
+
+Then rebuild with `make rebuild`.
+
 #### Flashing via Radio
 
 We support two modes of flashing via the Crazyradio PA dongle:

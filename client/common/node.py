@@ -74,7 +74,10 @@ class Node:
 
     def create_publisher(self, name, data_type, event_id) -> PublisherPort:
         service = (
-            self.node.service_builder(iceoryx2.ServiceName.new(name)).publish_subscribe(data_type).open_or_create()
+            self.node.service_builder(iceoryx2.ServiceName.new(name))
+            .publish_subscribe(data_type)
+            .subscriber_max_borrowed_samples(4)
+            .open_or_create()
         )
         publisher = service.publisher_builder().create()
 
@@ -95,6 +98,7 @@ class Node:
                     self.node
                     .service_builder(iceoryx2.ServiceName.new(name))
                     .publish_subscribe(data_type)
+                    .subscriber_max_borrowed_samples(4)
                     .open_or_create()
                 )
                 break
