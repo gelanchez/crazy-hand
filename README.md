@@ -1,6 +1,14 @@
 # crazyflie-tfm
 
+Ground station for gesture-controlled flight of a [Crazyflie 2.1](https://www.bitcraze.io/products/crazyflie-2-1/) equipped with an [AI-deck](https://www.bitcraze.io/products/ai-deck/).
+
+The AI-deck's GAP8 processor captures a 324×244 grayscale camera feed and streams it over WiFi to the ground station, where [MediaPipe](https://ai.google.dev/edge/mediapipe/solutions/vision/gesture_recognizer) classifies hand gestures in real time. Recognised gestures trigger flight commands; hand position drives lateral, altitude, and distance tracking. Telemetry is logged to [QuestDB](https://questdb.com) and visualised in [Grafana](https://grafana.com).
+
+The ground station is a multi-process Python application. Nodes communicate via [iceoryx2](https://github.com/eclipse-iceoryx/iceoryx2) shared-memory IPC — zero-copy pub/sub for high-throughput data (images, telemetry) and a typed blackboard for live runtime configuration.
+
 ## ARCHITECTURE
+
+**Pub/sub topics (iceoryx2):**
 
 | Publisher      | Topic         | Subscriber(s)                             |
 | -------------- | ------------- | ----------------------------------------- |
@@ -9,6 +17,14 @@
 | `vision_node`  | `/perception` | `control_node`, `gui_node`, `logger_node` |
 | `wifi_node`    | `/telemetry`  | `gui_node`, `logger_node`                 |
 | `wifi_node`    | `/image`      | `gui_node`, `logger_node`, `vision_node`  |
+
+**Blackboard (iceoryx2 key-value, runtime config):**
+
+| Writer     | Service   | Readers                                          |
+| ---------- | --------- | ------------------------------------------------ |
+| `gui_node` | `/config` | `control_node`, `vision_node`, `logger_node`     |
+
+18 typed entries (flight speed, yaw rates, altitude limits, gesture thresholds, CLAHE toggle, tracking gains). All editable live via **Settings → Settings…** without restarting nodes.
 
 ## INSTALLATION
 
@@ -193,6 +209,43 @@ python -m client.main
 python -m client.main --sim
 python -m client.main --help
 ```
+
+- **Process images** (`Ctrl+P`) — enables gesture recognition and hand tracking overlay.
+- **Settings** (`Settings → Settings…`) — live-tune flight speed, yaw, altitude limits, gesture thresholds, and tracking gains without restarting.
+- Drone takes off directly into **tracking mode** (hand following). Press `T` to toggle tracking off/on.
+
+## PILOTING
+
+**Flight**
+
+| Key              | Action                                            |
+| ---------------- | ------------------------------------------------- |
+| `Space`          | Take off / Land                                   |
+| `Esc`            | Emergency stop — cuts motors immediately          |
+| `T`              | Toggle hand-tracking mode                         |
+| `C`              | Stabilise — stop lateral motion, hold altitude    |
+| `M`              | Motor test — spins briefly on ground, won't lift  |
+
+**Movement** (airborne only)
+
+| Key              | Action                                            |
+| ---------------- | ------------------------------------------------- |
+| `↑ / ↓`          | Forward / Backward                                |
+| `← / →`          | Strafe left / right                               |
+| `Shift + ↑↓←→`   | Fast forward / backward / strafe                  |
+| `A / D`          | Yaw right / left                                  |
+| `Shift + A / D`  | Fast yaw                                          |
+| `W / S`          | Altitude up / down                                |
+| `Shift + W / S`  | Larger altitude step                              |
+
+**Application**
+
+| Key              | Action                                            |
+| ---------------- | ------------------------------------------------- |
+| `Ctrl+P`         | Toggle image processing (gesture recognition)     |
+| `Ctrl+S`         | Toggle image saving                               |
+| `Ctrl+/`         | Show keyboard shortcuts                           |
+| `Ctrl+Q`         | Exit                                              |
 
 ## TROUBLESHOOTING
 
