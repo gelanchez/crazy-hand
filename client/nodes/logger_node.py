@@ -185,6 +185,7 @@ class LoggerNode(Node):
                 hand_y=data.contents.hand_y,
                 gesture_name=gesture_name,
                 gesture_confidence=data.contents.gesture_confidence,
+                hand_span=data.contents.hand_span,
             )
 
             if self._get_save_images():

@@ -39,8 +39,8 @@ APP_CFLAGS 		+= -DQVGA_MODE # QVGA format (324x244)
 
 #! Choose encoding here
 # Image encoding
-# APP_CFLAGS 		+= -DRAW_ENCODING
-APP_CFLAGS		+= -DJPEG_ENCODING
+APP_CFLAGS 		+= -DRAW_ENCODING
+# APP_CFLAGS		+= -DJPEG_ENCODING
 CONFIG_GAP_LIB_JPEG = 1
 
 #! Choose JPEG quality (only applies when JPEG_ENCODING is set)

@@ -88,6 +88,7 @@ class VisionNode(Node):
 
         self._confirmed_gesture = "NONE"
         self._last_confirm_time = 0
+        self._clahe_enabled = CLAHE_ENABLED
 
     # --- Stable gesture resolution ---
     def _update_gesture(self, candidate, confidence):
@@ -167,6 +168,11 @@ class VisionNode(Node):
                     if not self.blackboard_read(self.blackboard_reader, "process_images"):
                         continue
 
+                    self._confidence_threshold = self.blackboard_read(self.blackboard_reader, "gesture_threshold")
+                    self._debounce_ms = self.blackboard_read(self.blackboard_reader, "gesture_debounce_ms")
+                    self._hysteresis_ms = self.blackboard_read(self.blackboard_reader, "gesture_hysteresis_ms")
+                    self._clahe_enabled = self.blackboard_read(self.blackboard_reader, "clahe_enabled")
+
                     # --- Iceoryx safe copy ---
                     payload = sample.payload()
                     raw_ptr = payload.contents.pixels
@@ -189,7 +195,7 @@ class VisionNode(Node):
                     del sample
 
                 # --- Image prep ---
-                if CLAHE_ENABLED:
+                if self._clahe_enabled:
                     pixels = self._clahe.apply(pixels)
                 # cv2.COLOR_GRAY2RGB: single C++ call, output already contiguous
                 pixels = cv2.cvtColor(pixels, cv2.COLOR_GRAY2RGB)
@@ -211,6 +217,7 @@ class VisionNode(Node):
 
                 # --- Hand detection ---
                 pixel_x, pixel_y = 0, 0
+                hand_span = 0.0
                 if results.hand_landmarks:
                     landmarks = results.hand_landmarks[0]
 
@@ -219,6 +226,7 @@ class VisionNode(Node):
 
                     pixel_x = int(cx * IMAGE_WIDTH)
                     pixel_y = int(cy * IMAGE_HEIGHT)
+                    hand_span = float(np.linalg.norm(coords[12] - coords[0]))
 
                 # --- Gesture extraction ---
                 gesture_name = None
@@ -291,12 +299,14 @@ class VisionNode(Node):
                         data.contents.hand_y = pixel_y
                         data.contents.gesture_name = _to_c_char_array(stable_gesture)
                         data.contents.gesture_confidence = confidence if confidence else 0.0
+                        data.contents.hand_span = hand_span
                     else:
                         data.contents.hand_detected = False
                         data.contents.hand_x = 0
                         data.contents.hand_y = 0
                         data.contents.gesture_name = _to_c_char_array("NONE")
                         data.contents.gesture_confidence = 0.0
+                        data.contents.hand_span = 0.0
 
                     processed_flat = pixels.flatten()
                     ctypes.memmove(

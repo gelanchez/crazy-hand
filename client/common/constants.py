@@ -6,14 +6,14 @@ from pathlib import Path
 # Edit here to change levels without touching node files.
 # Keys match the `name` passed to setup_logging(). Unlisted loggers use caller default.
 LOG_LEVELS: dict[str, tuple[int, int]] = {
-    "main":          (logging.INFO,  logging.INFO),
-    "database":      (logging.INFO,  logging.INFO),
-    "control_node":  (logging.DEBUG, logging.DEBUG),
-    "vision_node":   (logging.DEBUG, logging.DEBUG),
-    "wifi_node":     (logging.DEBUG, logging.INFO),
-    "gui_node":      (logging.DEBUG, logging.DEBUG),
-    "gui_command":   (logging.DEBUG, logging.DEBUG),
-    "logger_node":   (logging.INFO,  logging.INFO),
+    "main": (logging.INFO, logging.INFO),
+    "database": (logging.INFO, logging.INFO),
+    "control_node": (logging.DEBUG, logging.DEBUG),
+    "vision_node": (logging.DEBUG, logging.DEBUG),
+    "wifi_node": (logging.DEBUG, logging.INFO),
+    "gui_node": (logging.DEBUG, logging.DEBUG),
+    "gui_command": (logging.DEBUG, logging.DEBUG),
+    "logger_node": (logging.INFO, logging.INFO),
 }
 
 # Paths
@@ -118,32 +118,36 @@ class KeyCode(IntEnum):
 
 
 # Flight control
-SPEED_FACTOR = 0.3          # m/s vx/vy normal
-FAST_SPEED_FACTOR = 0.6     # m/s vx/vy with Shift
-DEFAULT_HEIGHT = 0.3        # m initial take-off altitude
-ALTITUDE_STEP = 0.1         # m per W/S press
-ALTITUDE_STEP_FAST = 0.2    # m per Shift+W/S press
-YAW_RATE = 70.0             # deg/s normal yaw
-YAW_RATE_FAST = 200.0       # deg/s Shift yaw
-LAND_RATE = 0.2             # m/s controlled descent rate
-LAND_CUTOFF = 0.05          # m — cut motors below this height
-MAX_ALTITUDE = 2.0          # m ceiling for manual altitude control
-MIN_ALTITUDE = 0.1          # m floor for manual altitude control
-MOTOR_TEST_THRUST = 12000   # raw thrust for ground motor test (~18% — spins visibly, won't lift)
-MOTOR_TEST_DURATION = 0.5   # seconds to run motor test
+SPEED_FACTOR = 0.3  # m/s vx/vy normal
+FAST_SPEED_FACTOR = 0.6  # m/s vx/vy with Shift
+DEFAULT_HEIGHT = 0.3  # m initial take-off altitude
+ALTITUDE_STEP = 0.1  # m per W/S press
+ALTITUDE_STEP_FAST = 0.2  # m per Shift+W/S press
+YAW_RATE = 70.0  # deg/s normal yaw
+YAW_RATE_FAST = 200.0  # deg/s Shift yaw
+LAND_RATE = 0.2  # m/s controlled descent rate
+LAND_CUTOFF = 0.05  # m — cut motors below this height
+MAX_ALTITUDE = 2.0  # m ceiling for manual altitude control
+MIN_ALTITUDE = 0.1  # m floor for manual altitude control
+MOTOR_TEST_THRUST = 12000  # raw thrust for ground motor test (~18% — spins visibly, won't lift)
+MOTOR_TEST_DURATION = 0.5  # seconds to run motor test
 
 # Vision / gesture recognition
-GESTURE_MIN_CONFIDENCE = 0.5    # MediaPipe hand detection / presence / tracking
-GESTURE_THRESHOLD = 0.65        # minimum confidence to accept a gesture
-GESTURE_DEBOUNCE_MS = 300       # stable time required before confirming gesture
-GESTURE_HYSTERESIS_MS = 200     # cooldown to prevent rapid gesture switching
+GESTURE_MIN_CONFIDENCE = 0.3  # MediaPipe hand detection / presence / tracking
+GESTURE_THRESHOLD = 0.5  # minimum confidence to accept a gesture
+GESTURE_DEBOUNCE_MS = 300  # stable time required before confirming gesture
+GESTURE_HYSTERESIS_MS = 200  # cooldown to prevent rapid gesture switching
 CLAHE_ENABLED = True
-CLAHE_CLIP_LIMIT = 2.0          # max contrast amplification per tile (higher = more aggressive)
-CLAHE_TILE_GRID_SIZE = (8, 8)   # grid of tiles for adaptive histogram equalisation
+CLAHE_CLIP_LIMIT = 2.0  # max contrast amplification per tile (higher = more aggressive)
+CLAHE_TILE_GRID_SIZE = (8, 8)  # grid of tiles for adaptive histogram equalisation
 
 # Tracking
-TRACKING_EMA_ALPHA = 0.3        # EMA smoothing factor for hand position (0=frozen, 1=raw)
-TRACKING_LOSS_FRAMES = 5        # consecutive no-detection frames before hand considered lost
-TRACKING_DEADZONE_PX = 20       # pixel radius around frame centre to ignore (no velocity)
-TRACKING_SPEED_SCALE = 0.003    # m/s per pixel of lateral error (tune to taste)
-TRACKING_ALT_SCALE = 0.0005     # m per pixel of vertical error per frame (tune to taste)
+TRACKING_EMA_ALPHA = 0.3  # EMA smoothing factor for hand position (0=frozen, 1=raw)
+TRACKING_LOSS_FRAMES = 5  # consecutive no-detection frames before hand considered lost
+TRACKING_DEADZONE_PX = 20  # pixel radius around frame centre to ignore (no velocity)
+TRACKING_MAX_SPEED = 0.15  # m/s lateral/forward cap during tracking (separate from manual SPEED_FACTOR)
+TRACKING_SPEED_SCALE = 0.008  # m/s per pixel of lateral error (tune to taste)
+TRACKING_ALT_SCALE = 0.0005  # m per pixel of vertical error per frame (tune to taste)
+TRACKING_DISTANCE = 1.5  # m target distance from hand (0.0 = disabled)
+TRACKING_DISTANCE_SCALE = 0.5  # m/s per metre of distance error
+TRACKING_HAND_SPAN_AT_1M = 0.25  # calibration: normalised wrist-to-fingertip span at 1 m

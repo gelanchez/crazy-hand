@@ -63,6 +63,7 @@ class PerceptionData(ctypes.Structure):
         ("hand_y", ctypes.c_uint16),
         ("gesture_name", ctypes.c_char * GESTURE_NAME_SIZE),
         ("gesture_confidence", ctypes.c_float),
+        ("hand_span", ctypes.c_float),   # normalised wrist-to-middle-fingertip span (0 = not detected)
         ("processed_pixels", ctypes.c_ubyte * (IMAGE_SIZE * 3)),
     ]
 

@@ -3,6 +3,7 @@ import time
 
 import iceoryx2
 
+from client.common.blackboards import CONFIG
 from client.common.constants import (
     ALTITUDE_STEP,
     ALTITUDE_STEP_FAST,
@@ -19,8 +20,12 @@ from client.common.constants import (
     SPEED_FACTOR,
     TRACKING_ALT_SCALE,
     TRACKING_DEADZONE_PX,
+    TRACKING_DISTANCE,
+    TRACKING_DISTANCE_SCALE,
     TRACKING_EMA_ALPHA,
+    TRACKING_HAND_SPAN_AT_1M,
     TRACKING_LOSS_FRAMES,
+    TRACKING_MAX_SPEED,
     TRACKING_SPEED_SCALE,
     YAW_RATE,
     YAW_RATE_FAST,
@@ -65,6 +70,13 @@ class ControlNode(Node):
         self._motor_test_end: float = 0.0
         self._thrust: int = 0
 
+        self.blackboard_reader = None
+
+    def _bb(self, key: str, fallback):
+        if self.blackboard_reader is None:
+            return fallback
+        return self.blackboard_read(self.blackboard_reader, key)
+
     def _handle_gesture(self, perception):
         if not perception.hand_detected:
             return
@@ -105,20 +117,36 @@ class ControlNode(Node):
         error_x = filtered_x - IMAGE_WIDTH / 2
         error_y = filtered_y - IMAGE_HEIGHT / 2
 
+        speed_cap = self._bb("tracking_max_speed", TRACKING_MAX_SPEED)
+        tracking_speed = self._bb("tracking_speed_scale", TRACKING_SPEED_SCALE)
+        tracking_alt = self._bb("tracking_alt_scale", TRACKING_ALT_SCALE)
+        max_alt = self._bb("max_altitude", MAX_ALTITUDE)
+        min_alt = self._bb("min_altitude", MIN_ALTITUDE)
+
         # Lateral: error_x → vy (strafe)
         # NOTE: flip sign if drone moves wrong way
         vy = (
-            max(-SPEED_FACTOR, min(SPEED_FACTOR, -TRACKING_SPEED_SCALE * error_x))
+            max(-speed_cap, min(speed_cap, -tracking_speed * error_x))
             if abs(error_x) > TRACKING_DEADZONE_PX
             else 0.0
         )
 
         # Vertical: error_y → zdistance delta (hand above centre → go up)
         if abs(error_y) > TRACKING_DEADZONE_PX:
-            new_z = self._hover["zdistance"] - TRACKING_ALT_SCALE * error_y
-            self._hover["zdistance"] = max(MIN_ALTITUDE, min(MAX_ALTITUDE, new_z))
+            new_alt = self._hover["zdistance"] - tracking_alt * error_y
+            self._hover["zdistance"] = max(min_alt, min(max_alt, new_alt))
 
-        self._hover["vx"] = 0.0
+        tracking_distance = self._bb("tracking_distance", TRACKING_DISTANCE)
+        if tracking_distance > 0 and perception.hand_span > 0:
+            tracking_dist_scale = self._bb("tracking_distance_scale", TRACKING_DISTANCE_SCALE)
+            hand_span_at_1m = self._bb("tracking_hand_span_at_1m", TRACKING_HAND_SPAN_AT_1M)
+            estimated_distance = hand_span_at_1m / perception.hand_span
+            error_d = estimated_distance - tracking_distance
+            vx = max(-speed_cap, min(speed_cap, tracking_dist_scale * error_d))
+        else:
+            vx = 0.0
+
+        self._hover["vx"] = vx
         self._hover["vy"] = vy
         self._publish_action(ActionSource.TRACKING)
 
@@ -223,8 +251,14 @@ class ControlNode(Node):
             shift = bool(command.shift)
             del command, sample
 
-            speed = FAST_SPEED_FACTOR if shift else SPEED_FACTOR
-            yaw = YAW_RATE_FAST if shift else YAW_RATE
+            speed_factor = self._bb("speed_factor", SPEED_FACTOR)
+            fast_speed_factor = self._bb("fast_speed_factor", FAST_SPEED_FACTOR)
+            yaw_rate = self._bb("yaw_rate", YAW_RATE)
+            yaw_rate_fast = self._bb("yaw_rate_fast", YAW_RATE_FAST)
+            max_alt = self._bb("max_altitude", MAX_ALTITUDE)
+            min_alt = self._bb("min_altitude", MIN_ALTITUDE)
+            speed = fast_speed_factor if shift else speed_factor
+            yaw = yaw_rate_fast if shift else yaw_rate
             altitude_step = ALTITUDE_STEP_FAST if shift else ALTITUDE_STEP
             airborne = self._state in (FlightState.AIRBORNE, FlightState.TRACKING)
 
@@ -233,12 +267,12 @@ class ControlNode(Node):
                 case (True, KeyCode.SPACE):
                     if self._state == FlightState.IDLE:
                         self._hover["zdistance"] = DEFAULT_HEIGHT
-                        self._state = FlightState.AIRBORNE
+                        self._state = FlightState.TRACKING
                         self._flight_command = FlightCommand.TAKEOFF
                         self.logger.info("TAKEOFF commanded")
                         changed = True
                     elif self._state == FlightState.LANDING:
-                        self._state = FlightState.AIRBORNE
+                        self._state = FlightState.TRACKING
                         self._hover["zdistance"] = DEFAULT_HEIGHT
                         self.logger.info("Re-takeoff: cancelling landing, climbing to DEFAULT_HEIGHT")
                         changed = True
@@ -300,11 +334,11 @@ class ControlNode(Node):
                     self._hover["yawrate"] = yaw
                     changed = True
                 case (True, KeyCode.W) if airborne:
-                    self._hover["zdistance"] = min(MAX_ALTITUDE, self._hover["zdistance"] + altitude_step)
+                    self._hover["zdistance"] = min(max_alt, self._hover["zdistance"] + altitude_step)
                     self.logger.info(f"Altitude → {self._hover['zdistance']:.2f}m")
                     changed = True
                 case (True, KeyCode.S) if airborne:
-                    self._hover["zdistance"] = max(MIN_ALTITUDE, self._hover["zdistance"] - altitude_step)
+                    self._hover["zdistance"] = max(min_alt, self._hover["zdistance"] - altitude_step)
                     self.logger.info(f"Altitude → {self._hover['zdistance']:.2f}m")
                     changed = True
 
@@ -354,6 +388,8 @@ class ControlNode(Node):
         ):
             self.logger.error("Failed to create ports")
             return
+
+        self.blackboard_reader = self.create_blackboard_reader("/config", CONFIG)
 
         # TODO: Replace timed_wait_one workaround with WaitSet once the
         # iceoryx2 spinning bug is fixed (see GitHub issue in thesis/Iceoryx2.md).
