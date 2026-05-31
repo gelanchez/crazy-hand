@@ -63,7 +63,7 @@ _SHORTCUTS = {
     "↑ / ↓": "Forward / Backward",
     "← / →": "Strafe left / right",
     "Shift+↑↓←→": "Fast forward / backward / strafe",
-    "A / D": "Yaw left / right",
+    "A / D": "Yaw right / left",
     "Shift+A / D": "Fast yaw",
     "W / S": "Altitude up / down",
     "Shift+W / S": "Larger altitude step",
@@ -359,12 +359,6 @@ class SettingsDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
-    def _write(self, key, value):
-        Node.blackboard_write(self._writer, key, value)
-
-    def _read(self, key):
-        return Node.blackboard_read(self._reader, key)
-
     def _float_spin(self, key, min_val, max_val, step, decimals, suffix="", tooltip=""):
         sb = QDoubleSpinBox()
         sb.setRange(min_val, max_val)
@@ -374,8 +368,8 @@ class SettingsDialog(QDialog):
             sb.setSuffix(f" {suffix}")
         if tooltip:
             sb.setToolTip(tooltip)
-        sb.setValue(self._read(key))
-        sb.valueChanged.connect(lambda v: self._write(key, v))
+        sb.setValue(Node.blackboard_read(self._reader, key))
+        sb.valueChanged.connect(lambda v: Node.blackboard_write(self._writer, key, v))
         return sb
 
     def _int_spin(self, key, min_val, max_val, step, suffix="", tooltip=""):
@@ -386,8 +380,8 @@ class SettingsDialog(QDialog):
             sb.setSuffix(f" {suffix}")
         if tooltip:
             sb.setToolTip(tooltip)
-        sb.setValue(self._read(key))
-        sb.valueChanged.connect(lambda v: self._write(key, v))
+        sb.setValue(Node.blackboard_read(self._reader, key))
+        sb.valueChanged.connect(lambda v: Node.blackboard_write(self._writer, key, v))
         return sb
 
     def _flight_group(self):
@@ -454,8 +448,8 @@ class SettingsDialog(QDialog):
         )
         cb = QCheckBox()
         cb.setToolTip("Adaptive histogram equalisation — improves hand detection in low or uneven light")
-        cb.setChecked(self._read("clahe_enabled"))
-        cb.toggled.connect(lambda v: self._write("clahe_enabled", v))
+        cb.setChecked(Node.blackboard_read(self._reader, "clahe_enabled"))
+        cb.toggled.connect(lambda v: Node.blackboard_write(self._writer, "clahe_enabled", v))
         form.addRow("CLAHE:", cb)
         return group
 

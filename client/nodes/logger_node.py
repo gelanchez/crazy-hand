@@ -79,6 +79,14 @@ class LoggerNode(Node):
             self._save_images_last_read = now
         return self._save_images
 
+    def _drain(self, subscriber):
+        """Yield each queued iceoryx2 sample; stops when queue is empty."""
+        while True:
+            sample = subscriber.receive()
+            if sample is None:
+                return
+            yield sample
+
     def _enqueue_save(self, pixels_bytes: bytes, path: Path, label: str = "frame") -> None:
         try:
             self._save_queue.put_nowait((pixels_bytes, path))
@@ -87,11 +95,7 @@ class LoggerNode(Node):
             self.logger.warning(f"Image save queue full — dropping {label}")
 
     def _handle_image(self):
-        # Drain all queued samples to prevent notification pile-up
-        while True:
-            sample = self.image_port.subscriber.receive()
-            if sample is None:
-                break
+        for sample in self._drain(self.image_port.subscriber):
             if self._get_save_images():
                 data = sample.payload()
                 pixels_bytes = bytes(data.contents.pixels)
@@ -102,11 +106,7 @@ class LoggerNode(Node):
             del sample
 
     def _handle_telemetry(self):
-        # Drain all queued samples to prevent notification pile-up
-        while True:
-            sample = self.telemetry_port.subscriber.receive()
-            if sample is None:
-                break
+        for sample in self._drain(self.telemetry_port.subscriber):
             data = sample.payload()
             self.logger.debug(f"Received Telemetry: {data.contents}")
             try:
@@ -118,30 +118,17 @@ class LoggerNode(Node):
                 ts=datetime.now(timezone.utc),
                 fps=c.fps,
                 status=status_enum,
-                x=c.x,
-                y=c.y,
-                z=c.z,
-                vx=c.vx,
-                vy=c.vy,
-                vz=c.vz,
-                roll=c.roll,
-                pitch=c.pitch,
-                yaw=c.yaw,
-                m1=c.m1,
-                m2=c.m2,
-                m3=c.m3,
-                m4=c.m4,
+                x=c.x, y=c.y, z=c.z,
+                vx=c.vx, vy=c.vy, vz=c.vz,
+                roll=c.roll, pitch=c.pitch, yaw=c.yaw,
+                m1=c.m1, m2=c.m2, m3=c.m3, m4=c.m4,
                 vbat=c.vbat,
             )
             del c, data, sample
             self.database.log(telemetry_sample)
 
     def _handle_action(self):
-        # Drain all queued samples to prevent notification pile-up
-        while True:
-            sample = self.action_port.subscriber.receive()
-            if sample is None:
-                break
+        for sample in self._drain(self.action_port.subscriber):
             data = sample.payload()
             self.logger.debug(f"Received Action: {data.contents}")
             c = data.contents
@@ -164,11 +151,7 @@ class LoggerNode(Node):
             self.database.log(action_sample)
 
     def _handle_perception(self):
-        # Drain all queued samples to prevent notification pile-up
-        while True:
-            sample = self.perception_port.subscriber.receive()
-            if sample is None:
-                break
+        for sample in self._drain(self.perception_port.subscriber):
             data = sample.payload()
             self.logger.debug(f"Received Perception: {data.contents}")
 
@@ -224,7 +207,7 @@ class LoggerNode(Node):
         PROCESSED_IMAGES_PATH.mkdir(parents=True, exist_ok=True)
 
         # TODO: Replace timed_wait_one workaround with WaitSet once the
-        # iceoryx2 spinning bug is fixed (see GitHub issue in thesis/Iceoryx2.md).
+        # iceoryx2 spinning bug is fixed (confirmed v0.9.0–v0.9.1; see thesis/Iceoryx2.md).
         # Intended WaitSet code (4 attachments — image, telemetry, action, perception):
         #
         #   waitset = iceoryx2.WaitSetBuilder.new().create(iceoryx2.ServiceType.Ipc)

@@ -328,10 +328,10 @@ class ControlNode(Node):
                     self._hover["vy"] = -speed
                     changed = True
                 case (True, KeyCode.A) if airborne:
-                    self._hover["yawrate"] = -yaw
+                    self._hover["yawrate"] = yaw
                     changed = True
                 case (True, KeyCode.D) if airborne:
-                    self._hover["yawrate"] = yaw
+                    self._hover["yawrate"] = -yaw
                     changed = True
                 case (True, KeyCode.W) if airborne:
                     self._hover["zdistance"] = min(max_alt, self._hover["zdistance"] + altitude_step)
@@ -407,7 +407,7 @@ class ControlNode(Node):
         #   finally: command_guard.delete(); perception_guard.delete(); waitset.delete()
         #
         # Workaround: WaitSet spins at 100% CPU after any listener receives its first
-        # notification — even with 2 attachments and a 50ms timeout (iceoryx2 v0.9.0).
+        # notification — even with 2 attachments and a 50ms timeout (confirmed v0.9.0–v0.9.1).
         try:
             while self.running:
                 # Block up to 50ms waiting for a perception event

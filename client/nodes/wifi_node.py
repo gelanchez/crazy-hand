@@ -41,6 +41,20 @@ NODE_NAME = "wifi_node"
 
 _MOTOR_PWM_MAX = 65535  # Crazyflie uint16 motor PWM range
 
+# cflib log key → TelemetryData field name (float, default 0.0)
+_TELE_FLOAT_FIELDS = (
+    ("stateEstimate.x",   "x"),
+    ("stateEstimate.y",   "y"),
+    ("stateEstimate.z",   "z"),
+    ("stateEstimate.vx",  "vx"),
+    ("stateEstimate.vy",  "vy"),
+    ("stateEstimate.vz",  "vz"),
+    ("stateEstimate.roll",  "roll"),
+    ("stateEstimate.pitch", "pitch"),
+    ("stateEstimate.yaw",   "yaw"),
+    ("pm.vbat", "vbat"),
+)
+
 # How often to emit frame-level DEBUG messages to console (every N frames)
 _FRAME_LOG_INTERVAL = 10
 
@@ -164,6 +178,18 @@ class WifiNode(Node):
                 self.cpx = None
 
             cflib.crtp.tcpdriver.TcpDriver.close = _patched_tcp_driver_close
+
+            # ping_thread raises BrokenPipeError when the socket closes before
+            # the thread exits — expected during shutdown, not an error.
+            import threading as _threading
+            _orig_excepthook = _threading.excepthook
+
+            def _thread_excepthook(args):
+                if args.exc_type is BrokenPipeError:
+                    return
+                _orig_excepthook(args)
+
+            _threading.excepthook = _thread_excepthook
 
         except Exception:
             pass
@@ -352,20 +378,10 @@ class WifiNode(Node):
                 with self._drone_state_lock:
                     state = dict(self._drone_state)
 
-                payload.x = state.get("stateEstimate.x", 0.0)
-                payload.y = state.get("stateEstimate.y", 0.0)
-                payload.z = state.get("stateEstimate.z", 0.0)
-                payload.vx = state.get("stateEstimate.vx", 0.0)
-                payload.vy = state.get("stateEstimate.vy", 0.0)
-                payload.vz = state.get("stateEstimate.vz", 0.0)
-                payload.roll = state.get("stateEstimate.roll", 0.0)
-                payload.pitch = state.get("stateEstimate.pitch", 0.0)
-                payload.yaw = state.get("stateEstimate.yaw", 0.0)
-                payload.m1 = round(state.get("motor.m1", 0) / _MOTOR_PWM_MAX * 100)
-                payload.m2 = round(state.get("motor.m2", 0) / _MOTOR_PWM_MAX * 100)
-                payload.m3 = round(state.get("motor.m3", 0) / _MOTOR_PWM_MAX * 100)
-                payload.m4 = round(state.get("motor.m4", 0) / _MOTOR_PWM_MAX * 100)
-                payload.vbat = state.get("pm.vbat", 0.0)
+                for cf_key, field in _TELE_FLOAT_FIELDS:
+                    setattr(payload, field, state.get(cf_key, 0.0))
+                for m in ("m1", "m2", "m3", "m4"):
+                    setattr(payload, m, round(state.get(f"motor.{m}", 0) / _MOTOR_PWM_MAX * 100))
 
                 sample.assume_init().send()
                 try:

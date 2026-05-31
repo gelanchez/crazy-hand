@@ -28,52 +28,37 @@ class BlackboardField:
     default: object
 
 
-def blackboard_bool(key, default=False):
+def _bb(key, c_type, default):
     return BlackboardField(
         key=ctypes.c_uint64(key),
-        value_type=ctypes.c_bool,
-        default=ctypes.c_bool(default),
-    )
-
-
-def blackboard_float(key, default=0.0):
-    return BlackboardField(
-        key=ctypes.c_uint64(key),
-        value_type=ctypes.c_float,
-        default=ctypes.c_float(default),
-    )
-
-
-def blackboard_int(key, default=0):
-    return BlackboardField(
-        key=ctypes.c_uint64(key),
-        value_type=ctypes.c_int32,
-        default=ctypes.c_int32(default),
+        value_type=c_type,
+        default=c_type(default),
     )
 
 
 _ENTRIES = [
-    ("save_images",             blackboard_bool,  {"default": False}),
-    ("process_images",          blackboard_bool,  {"default": False}),
+    # (name,                        c_type,          default)
+    ("save_images",                 ctypes.c_bool,   False),
+    ("process_images",              ctypes.c_bool,   False),
     # Flight control
-    ("speed_factor",            blackboard_float, {"default": SPEED_FACTOR}),
-    ("fast_speed_factor",       blackboard_float, {"default": FAST_SPEED_FACTOR}),
-    ("yaw_rate",                blackboard_float, {"default": YAW_RATE}),
-    ("yaw_rate_fast",           blackboard_float, {"default": YAW_RATE_FAST}),
-    ("max_altitude",            blackboard_float, {"default": MAX_ALTITUDE}),
-    ("min_altitude",            blackboard_float, {"default": MIN_ALTITUDE}),
+    ("speed_factor",                ctypes.c_float,  SPEED_FACTOR),
+    ("fast_speed_factor",           ctypes.c_float,  FAST_SPEED_FACTOR),
+    ("yaw_rate",                    ctypes.c_float,  YAW_RATE),
+    ("yaw_rate_fast",               ctypes.c_float,  YAW_RATE_FAST),
+    ("max_altitude",                ctypes.c_float,  MAX_ALTITUDE),
+    ("min_altitude",                ctypes.c_float,  MIN_ALTITUDE),
     # Gesture
-    ("gesture_threshold",       blackboard_float, {"default": GESTURE_THRESHOLD}),
-    ("gesture_debounce_ms",     blackboard_int,   {"default": GESTURE_DEBOUNCE_MS}),
-    ("gesture_hysteresis_ms",   blackboard_int,   {"default": GESTURE_HYSTERESIS_MS}),
-    ("clahe_enabled",           blackboard_bool,  {"default": CLAHE_ENABLED}),
+    ("gesture_threshold",           ctypes.c_float,  GESTURE_THRESHOLD),
+    ("gesture_debounce_ms",         ctypes.c_int32,  GESTURE_DEBOUNCE_MS),
+    ("gesture_hysteresis_ms",       ctypes.c_int32,  GESTURE_HYSTERESIS_MS),
+    ("clahe_enabled",               ctypes.c_bool,   CLAHE_ENABLED),
     # Tracking
-    ("tracking_max_speed",       blackboard_float, {"default": TRACKING_MAX_SPEED}),
-    ("tracking_speed_scale",    blackboard_float, {"default": TRACKING_SPEED_SCALE}),
-    ("tracking_alt_scale",      blackboard_float, {"default": TRACKING_ALT_SCALE}),
-    ("tracking_distance",         blackboard_float, {"default": TRACKING_DISTANCE}),
-    ("tracking_distance_scale",   blackboard_float, {"default": TRACKING_DISTANCE_SCALE}),
-    ("tracking_hand_span_at_1m",  blackboard_float, {"default": TRACKING_HAND_SPAN_AT_1M}),
+    ("tracking_max_speed",          ctypes.c_float,  TRACKING_MAX_SPEED),
+    ("tracking_speed_scale",        ctypes.c_float,  TRACKING_SPEED_SCALE),
+    ("tracking_alt_scale",          ctypes.c_float,  TRACKING_ALT_SCALE),
+    ("tracking_distance",           ctypes.c_float,  TRACKING_DISTANCE),
+    ("tracking_distance_scale",     ctypes.c_float,  TRACKING_DISTANCE_SCALE),
+    ("tracking_hand_span_at_1m",    ctypes.c_float,  TRACKING_HAND_SPAN_AT_1M),
 ]
 
-CONFIG = {name: factory(key, **kwargs) for key, (name, factory, kwargs) in enumerate(_ENTRIES)}
+CONFIG = {name: _bb(key, c_type, default) for key, (name, c_type, default) in enumerate(_ENTRIES)}
