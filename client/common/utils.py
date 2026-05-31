@@ -8,6 +8,8 @@ from collections import deque
 from logging.handlers import QueueHandler, QueueListener, RotatingFileHandler
 from pathlib import Path
 
+from client.common.constants import LOG_LEVELS
+
 LOG_DIR = Path("data/logs")
 
 _LEVEL_COLORS = {
@@ -39,6 +41,10 @@ def setup_logging(
     console_level: int = logging.INFO,
     enable_file_logging: bool = True,
 ) -> logging.Logger:
+    _cfg = LOG_LEVELS.get(name)
+    if _cfg:
+        level, console_level = _cfg
+
     logger = logging.getLogger(name)
 
     if logger.handlers:

@@ -1,5 +1,4 @@
 import logging
-import sys
 import time
 
 import iceoryx2
@@ -33,8 +32,8 @@ from client.common.constants import (
     ServiceName,
 )
 from client.common.node import Node
-from client.common.utils import EMAFilter
 from client.common.payloads import ActionData, CommandData, PerceptionData
+from client.common.utils import EMAFilter
 
 NODE_NAME = "control_node"
 
@@ -177,31 +176,31 @@ class ControlNode(Node):
     def _publish_action(self, source: ActionSource = ActionSource.KEYBOARD):
         try:
             sample = self.action_port.publisher.loan_uninit()
-            p = sample.payload().contents
-            p.active = self._state in (
+            payload = sample.payload().contents
+            payload.active = self._state in (
                 FlightState.AIRBORNE,
                 FlightState.TRACKING,
                 FlightState.LANDING,
             )
-            p.command = int(self._flight_command)
-            p.state = int(self._state)
-            p.source = int(source)
-            p.vx, p.vy, p.yawrate, p.zdistance = (
+            payload.command = int(self._flight_command)
+            payload.state = int(self._state)
+            payload.source = int(source)
+            payload.vx, payload.vy, payload.yawrate, payload.zdistance = (
                 self._hover["vx"],
                 self._hover["vy"],
                 self._hover["yawrate"],
                 self._hover["zdistance"],
             )
-            p.ema_x = self._ema_x.value or 0.0
-            p.ema_y = self._ema_y.value or 0.0
-            p.thrust = self._thrust
-            cmd_name = self._flight_command.name
+            payload.ema_x = self._ema_x.value or 0.0
+            payload.ema_y = self._ema_y.value or 0.0
+            payload.thrust = self._thrust
+            command_name = self._flight_command.name
             sample.assume_init().send()
             self._flight_command = FlightCommand.NONE  # one-shot — reset after successful send
             self.action_port.notifier.notify_with_custom_event_id(self.action_port.event)
             self.logger.debug(
-                f"Action: state={self._state.name}, src={source.name}, cmd={cmd_name}, "
-                f"vx={p.vx:.2f}, vy={p.vy:.2f}, yaw={p.yawrate:.1f}, z={p.zdistance:.2f}"
+                f"Action: state={self._state.name}, source={source.name}, command={command_name}, "
+                f"vx={payload.vx:.2f}, vy={payload.vy:.2f}, yaw={payload.yawrate:.1f}, z={payload.zdistance:.2f}"
             )
         except Exception as e:
             self.logger.warning(f"Action publish failed: {e}")
@@ -226,7 +225,7 @@ class ControlNode(Node):
 
             speed = FAST_SPEED_FACTOR if shift else SPEED_FACTOR
             yaw = YAW_RATE_FAST if shift else YAW_RATE
-            alt_step = ALTITUDE_STEP_FAST if shift else ALTITUDE_STEP
+            altitude_step = ALTITUDE_STEP_FAST if shift else ALTITUDE_STEP
             airborne = self._state in (FlightState.AIRBORNE, FlightState.TRACKING)
 
             match (is_pressed, key):
@@ -301,11 +300,11 @@ class ControlNode(Node):
                     self._hover["yawrate"] = yaw
                     changed = True
                 case (True, KeyCode.W) if airborne:
-                    self._hover["zdistance"] = min(MAX_ALTITUDE, self._hover["zdistance"] + alt_step)
+                    self._hover["zdistance"] = min(MAX_ALTITUDE, self._hover["zdistance"] + altitude_step)
                     self.logger.info(f"Altitude → {self._hover['zdistance']:.2f}m")
                     changed = True
                 case (True, KeyCode.S) if airborne:
-                    self._hover["zdistance"] = max(MIN_ALTITUDE, self._hover["zdistance"] - alt_step)
+                    self._hover["zdistance"] = max(MIN_ALTITUDE, self._hover["zdistance"] - altitude_step)
                     self.logger.info(f"Altitude → {self._hover['zdistance']:.2f}m")
                     changed = True
 

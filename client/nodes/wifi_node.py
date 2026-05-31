@@ -1,7 +1,6 @@
 import ctypes
 import logging
 import math
-import sys
 import platform
 import queue
 import random

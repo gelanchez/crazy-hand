@@ -1,5 +1,20 @@
+import logging
 from enum import IntEnum, StrEnum, auto, unique
 from pathlib import Path
+
+# Logging — per-logger level overrides (file_level, console_level).
+# Edit here to change levels without touching node files.
+# Keys match the `name` passed to setup_logging(). Unlisted loggers use caller default.
+LOG_LEVELS: dict[str, tuple[int, int]] = {
+    "main":          (logging.INFO,  logging.INFO),
+    "database":      (logging.INFO,  logging.INFO),
+    "control_node":  (logging.DEBUG, logging.DEBUG),
+    "vision_node":   (logging.DEBUG, logging.DEBUG),
+    "wifi_node":     (logging.DEBUG, logging.INFO),
+    "gui_node":      (logging.DEBUG, logging.DEBUG),
+    "gui_command":   (logging.DEBUG, logging.DEBUG),
+    "logger_node":   (logging.INFO,  logging.INFO),
+}
 
 # Paths
 IOX2_CONFIG = Path(__file__).parent / "iceoryx2.toml"

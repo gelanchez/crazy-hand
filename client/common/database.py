@@ -24,9 +24,6 @@ from client.common.utils import setup_logging
 logger = setup_logging("database")
 
 
-# --- Data models ---
-
-
 @dataclass
 class TelemetrySample:
     TABLE = "telemetry_cf"
@@ -82,9 +79,6 @@ class PerceptionSample:
 Sample = Union[TelemetrySample, ActionSample, PerceptionSample]
 
 
-# --- Database ---
-
-
 class Database:
     def __init__(
         self,
@@ -118,8 +112,6 @@ class Database:
     def __exit__(self, exc_type, exc, tb):
         self.close()
 
-    # --- Connection ---
-
     def _connect(self) -> bool:
         if self.closed:
             return False
@@ -142,8 +134,6 @@ class Database:
             logger.warning(f"QuestDB connection failed: {e}")
             return False
 
-    # --- Worker ---
-
     def _worker(self):
         while not self._stop:
             time.sleep(self.flush_interval_s)
@@ -151,8 +141,6 @@ class Database:
                 self.flush()
             except Exception as e:
                 logger.error(f"Flush worker error: {e}")
-
-    # --- Log ---
 
     def log(self, sample: Sample):
         if self.closed:
@@ -195,8 +183,6 @@ class Database:
         except Exception as e:
             logger.error(f"Unexpected error during logging: {e}")
 
-    # --- Flush ---
-
     def flush(self):
         if self.sender is None:
             if not self._connect():
@@ -235,8 +221,6 @@ class Database:
 
             # restore lost data, preserving chronological order
             self.buffers[table] = rows + self.buffers[table]
-
-    # --- Shutdown ---
 
     def close(self):
         if self.closed:
