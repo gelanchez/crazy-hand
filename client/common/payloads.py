@@ -1,9 +1,13 @@
+"""ctypes struct definitions used as shared-memory payloads for iceoryx2 IPC between the drone client nodes."""
+
 import ctypes
 
 from client.common.constants import IMAGE_SIZE, AppStatus, FlightCommand, ImageFormat
 
 
 class ActionData(ctypes.Structure):
+    """Shared-memory payload carrying the current flight command and derived motion setpoints issued to the drone."""
+
     _fields_ = [
         ("active", ctypes.c_bool),
         ("command", ctypes.c_uint8),  # FlightCommand
@@ -13,9 +17,10 @@ class ActionData(ctypes.Structure):
         ("vy", ctypes.c_float),
         ("yawrate", ctypes.c_float),
         ("zdistance", ctypes.c_float),
-        ("ema_x", ctypes.c_float),  # EMA-filtered hand x (0.0 when not tracking)
-        ("ema_y", ctypes.c_float),  # EMA-filtered hand y (0.0 when not tracking)
-        ("thrust", ctypes.c_uint16),  # raw thrust for MOTOR_TEST (0–65535; 0 otherwise)
+        ("ema_x", ctypes.c_float),           # EMA-filtered hand x (0.0 when not tracking)
+        ("ema_y", ctypes.c_float),           # EMA-filtered hand y (0.0 when not tracking)
+        ("estimated_distance", ctypes.c_float),  # m from hand (0.0 when not tracking)
+        ("thrust", ctypes.c_uint16),         # raw thrust for MOTOR_TEST (0–65535; 0 otherwise)
     ]
 
     def __str__(self) -> str:
@@ -27,6 +32,8 @@ class ActionData(ctypes.Structure):
 
 
 class CommandData(ctypes.Structure):
+    """Shared-memory payload representing a single raw keyboard event (key code, pressed state, and shift modifier)."""
+
     _fields_ = [
         ("key", ctypes.c_uint8),
         ("is_pressed", ctypes.c_bool),
@@ -38,6 +45,8 @@ class CommandData(ctypes.Structure):
 
 
 class ImageData(ctypes.Structure):
+    """Shared-memory payload carrying a raw or JPEG-encoded camera frame together with its sequence id and timestamp."""
+
     _fields_ = [
         ("id", ctypes.c_uint64),
         ("timestamp", ctypes.c_uint64),
@@ -54,6 +63,8 @@ GESTURE_NAME_SIZE = 32
 
 
 class PerceptionData(ctypes.Structure):
+    """Shared-memory payload produced by the perception node, containing hand-tracking results and the annotated frame."""
+
     _fields_ = [
         ("id", ctypes.c_uint64),
         ("timestamp", ctypes.c_uint64),
@@ -74,6 +85,8 @@ class PerceptionData(ctypes.Structure):
 
 
 class TelemetryData(ctypes.Structure):
+    """Shared-memory payload streaming drone telemetry: app status, Kalman state estimate, motor outputs, and battery voltage."""
+
     _fields_ = [
         ("status", ctypes.c_uint8),
         ("fps", ctypes.c_float),

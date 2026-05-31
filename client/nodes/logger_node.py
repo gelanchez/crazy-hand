@@ -1,3 +1,4 @@
+"""Logs images, telemetry, actions, and perception data to disk and QuestDB."""
 import logging
 import queue
 import sys
@@ -38,6 +39,8 @@ PROCESSED_IMAGES_PATH = Path("./data/processed")
 
 
 class LoggerNode(Node):
+    """Subscribes to all data streams and persists them to disk and the time-series database."""
+
     def __init__(self, level=logging.INFO):
         super().__init__(NODE_NAME, level=level)
         self.database = Database()
@@ -88,6 +91,7 @@ class LoggerNode(Node):
             yield sample
 
     def _enqueue_save(self, pixels_bytes: bytes, path: Path, label: str = "frame") -> None:
+        """Push a raw pixel buffer onto the save queue, dropping it silently if the queue is full."""
         try:
             self._save_queue.put_nowait((pixels_bytes, path))
             self.logger.debug(f"Enqueued save: {path.name}")
@@ -95,6 +99,7 @@ class LoggerNode(Node):
             self.logger.warning(f"Image save queue full — dropping {label}")
 
     def _handle_image(self):
+        """Save raw camera frames to disk when image saving is enabled."""
         for sample in self._drain(self.image_port.subscriber):
             if self._get_save_images():
                 data = sample.payload()
@@ -106,6 +111,7 @@ class LoggerNode(Node):
             del sample
 
     def _handle_telemetry(self):
+        """Write incoming telemetry samples (pose, velocity, motors, battery) to the database."""
         for sample in self._drain(self.telemetry_port.subscriber):
             data = sample.payload()
             self.logger.debug(f"Received Telemetry: {data.contents}")
@@ -128,6 +134,7 @@ class LoggerNode(Node):
             self.database.log(telemetry_sample)
 
     def _handle_action(self):
+        """Write incoming action commands to the database, zeroing velocity fields when inactive."""
         for sample in self._drain(self.action_port.subscriber):
             data = sample.payload()
             self.logger.debug(f"Received Action: {data.contents}")
@@ -146,11 +153,13 @@ class LoggerNode(Node):
                 zdistance=0.0 if zero else c.zdistance,
                 ema_x=c.ema_x,
                 ema_y=c.ema_y,
+                estimated_distance=c.estimated_distance,
             )
             del c, data, sample
             self.database.log(action_sample)
 
     def _handle_perception(self):
+        """Write perception results to the database and optionally save the processed frame to disk."""
         for sample in self._drain(self.perception_port.subscriber):
             data = sample.payload()
             self.logger.debug(f"Received Perception: {data.contents}")

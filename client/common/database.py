@@ -1,3 +1,5 @@
+"""Async-buffered QuestDB writer with periodic flushing, automatic reconnection, and old-data cleanup."""
+
 import http.client
 import socket
 import subprocess
@@ -63,6 +65,7 @@ class ActionSample:
     zdistance: float
     ema_x: float
     ema_y: float
+    estimated_distance: float
 
 
 @dataclass
@@ -81,6 +84,8 @@ Sample = Union[TelemetrySample, ActionSample, PerceptionSample]
 
 
 class Database:
+    """Buffers telemetry, action, and perception samples and flushes them to QuestDB on a background thread."""
+
     def __init__(
         self,
         conf: str = QUESTDB_CONF,
@@ -144,6 +149,7 @@ class Database:
                 logger.error(f"Flush worker error: {e}")
 
     def log(self, sample: Sample):
+        """Serialize a sample into the corresponding table buffer; Enum/str fields become QuestDB symbols."""
         if self.closed:
             return
 
@@ -185,6 +191,7 @@ class Database:
             logger.error(f"Unexpected error during logging: {e}")
 
     def flush(self):
+        """Send all buffered rows to QuestDB, reconnecting first if the sender is unavailable."""
         if self.sender is None:
             if not self._connect():
                 return
@@ -198,6 +205,7 @@ class Database:
             self.sender = None
 
     def _flush_table(self, table: str):
+        """Atomically swap the named table's buffer and write its rows to QuestDB, restoring rows on failure."""
         rows = self.buffers.get(table)
 
         if not rows:
@@ -291,6 +299,7 @@ class Database:
 
     @staticmethod
     def cleanup_old_data(hours: int = 24 * 7):
+        """Drop partitions older than ``hours`` from all known tables, skipping tables that do not exist yet."""
         tables = [
             "telemetry_cf",
             "action_cf",
@@ -324,6 +333,7 @@ class Database:
 
     @staticmethod
     def _exec_sql(sql: str, host="127.0.0.1", port=9000) -> str:
+        """Execute a SQL statement against QuestDB's HTTP ``/exec`` endpoint and return the raw JSON response."""
         conn = http.client.HTTPConnection(host, port, timeout=3)
 
         path = "/exec?query=" + urllib.parse.quote(sql)

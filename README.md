@@ -69,8 +69,9 @@ sudo /bin/systemctl start grafana-server
 
 Open [Grafana server](https://grafana.com/docs/grafana/latest/setup-grafana/sign-in-to-grafana/).
 
-Grafana UI:
-<http://localhost:3000>
+Grafana UI: <http://localhost:3000>
+
+To connect QuestDB as a datasource: **Connections → Data sources → Add → QuestDB**, set host `127.0.0.1:8812`, user `admin`, password `quest`. The client writes to three tables: `telemetry_cf`, `action_cf`, `perception_cf`.
 
 ### QuestDB
 
@@ -213,6 +214,30 @@ python -m client.main --help
 - **Process images** (`Ctrl+P`) — enables gesture recognition and hand tracking overlay.
 - **Settings** (`Settings → Settings…`) — live-tune flight speed, yaw, altitude limits, gesture thresholds, and tracking gains without restarting.
 - Drone takes off directly into **tracking mode** (hand following). Press `T` to toggle tracking off/on.
+- **Simulation mode** (`--sim`) — runs without a drone: synthetic telemetry, no WiFi required. Useful for testing the UI and control logic.
+
+### Data
+
+Images and processed frames are saved to:
+
+```text
+data/images/       # raw frames (when Save Images is enabled)
+data/processed/    # vision overlay frames (gesture landmarks, labels)
+```
+
+Telemetry, actions, and perception events are streamed to QuestDB in real time and retained for 7 days (configurable).
+
+## GESTURES
+
+With **Process Images** enabled, MediaPipe classifies hand gestures from the live camera feed.
+
+| Gesture      | Action                                   |
+| ------------ | ---------------------------------------- |
+| `Thumb_Up`   | Take off (from ground only)              |
+| `Thumb_Down` | Land                                     |
+| `Victory`    | Toggle hand-tracking mode on / off       |
+
+Gesture confidence threshold, debounce, and hysteresis are tunable live in **Settings → Gesture**.
 
 ## PILOTING
 
@@ -278,8 +303,3 @@ If you get `Failed to flash: [Errno 13] Access denied (insufficient permissions)
    ```
 
 3. **CRITICAL**: Unplug the Crazyradio dongle from the USB port and plug it back in so that the permissions are applied to the active device node.
-
-## LINKS
-
-- <https://ai.google.dev/edge/mediapipe/solutions/setup_python>
-- <https://ai.google.dev/edge/mediapipe/solutions/vision/gesture_recognizer>

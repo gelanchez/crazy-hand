@@ -1,3 +1,10 @@
+"""PySide6 ground-station GUI that displays live video, telemetry, and perception data from the drone.
+
+Keyboard input is translated to command messages published over iceoryx2, while a background
+QThread polls image, telemetry, perception, and action service topics and emits Qt signals to
+update the UI.
+"""
+
 import logging
 import os
 import signal
@@ -86,7 +93,7 @@ _FPS_ORANGE = 4
 
 
 def _battery_color(vbat: float) -> str:
-    """Interpolate red(3.0V) → orange(3.7V) → green(4.2V)."""
+    """Return a CSS hex colour interpolated from red (3.0 V) through orange (3.7 V) to green (4.2 V)."""
     if vbat >= 3.7:
         t = min(1.0, (vbat - 3.7) / (4.2 - 3.7))
         r, g, b = (
@@ -123,26 +130,32 @@ _KEY_MAP: dict = {
 
 
 class GuiNode(Node, QThread):
+    """Background QThread that polls iceoryx2 service topics and forwards data to the GUI via Qt signals."""
+
     status_changed = Signal(str)
     image_received = Signal(object)
     telemetry_updated = Signal(dict)
     perception_updated = Signal(bool, str, float)  # hand_detected, gesture, confidence
-    flight_state_updated = Signal(str)  # FlightState name
+    flight_state_updated = Signal(str)              # FlightState name
+    tracking_distance_updated = Signal(float)       # estimated distance m (0.0 = not tracking)
 
     def __init__(self, parent=None):
         QThread.__init__(self, parent)
         Node.__init__(self, NODE_NAME, level=logging.DEBUG, handle_signals=False)
 
     def _drain_action(self) -> None:
+        """Consume all pending action samples and emit the latest flight state and estimated tracking distance."""
         if self.action_port is None or self.action_port.subscriber is None:
             return
         latest_state = None
+        latest_dist = None
         while True:
             sample = self.action_port.subscriber.receive()
             if sample is None:
                 break
             data = sample.payload()
             latest_state = int(data.contents.state)
+            latest_dist = float(data.contents.estimated_distance)
             del data, sample
         if latest_state is not None:
             try:
@@ -150,8 +163,14 @@ class GuiNode(Node, QThread):
             except ValueError:
                 state_name = str(latest_state)
             self.flight_state_updated.emit(state_name)
+            self.tracking_distance_updated.emit(latest_dist)
 
     def _drain_images(self, process_images: bool) -> None:
+        """Consume all pending raw image samples and emit the latest frame's pixel array.
+
+        When process_images is True the frame is suppressed here because the processed
+        frame will arrive via _drain_perception instead.
+        """
         latest = None
         while True:
             s = self.image_port.subscriber.receive()
@@ -169,6 +188,11 @@ class GuiNode(Node, QThread):
             del latest
 
     def _drain_perception(self, process_images: bool) -> None:
+        """Consume all pending perception samples, emit hand/gesture state, and optionally emit the processed frame.
+
+        When process_images is True the annotated RGB pixels from vision_node are forwarded
+        to the video display instead of the raw grayscale frame.
+        """
         if self.perception_port is None or self.perception_port.subscriber is None:
             return
         last_hand_detected = None
@@ -192,6 +216,7 @@ class GuiNode(Node, QThread):
             self.perception_updated.emit(last_hand_detected, last_gesture, last_confidence)
 
     def _drain_telemetry(self) -> None:
+        """Consume all pending telemetry samples and emit status text and telemetry dict for each one."""
         while True:
             sample = self.telemetry_port.subscriber.receive()
             if sample is None:
@@ -318,6 +343,8 @@ class GuiNode(Node, QThread):
 
 
 class ShortcutsDialog(QDialog):
+    """Read-only dialog that displays the keyboard shortcut reference table."""
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Keyboard Shortcuts")
@@ -343,6 +370,8 @@ class ShortcutsDialog(QDialog):
 
 
 class SettingsDialog(QDialog):
+    """Modal dialog for editing runtime flight, gesture, and tracking parameters via the shared blackboard."""
+
     def __init__(self, writer, reader, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Settings")
@@ -360,6 +389,7 @@ class SettingsDialog(QDialog):
         layout.addWidget(buttons)
 
     def _float_spin(self, key, min_val, max_val, step, decimals, suffix="", tooltip=""):
+        """Create a QDoubleSpinBox pre-loaded from the blackboard key that writes back on every value change."""
         sb = QDoubleSpinBox()
         sb.setRange(min_val, max_val)
         sb.setSingleStep(step)
@@ -373,6 +403,7 @@ class SettingsDialog(QDialog):
         return sb
 
     def _int_spin(self, key, min_val, max_val, step, suffix="", tooltip=""):
+        """Create a QSpinBox pre-loaded from the blackboard key that writes back on every value change."""
         sb = QSpinBox()
         sb.setRange(min_val, max_val)
         sb.setSingleStep(step)
@@ -534,6 +565,8 @@ class SettingsDialog(QDialog):
 
 
 class MainWindow(QMainWindow):
+    """Main application window containing the live video panel, telemetry sidebar, menus, and keyboard handling."""
+
     PANEL_WIDTH = 185
     WINDOW_WIDTH = IMAGE_WIDTH * IMAGE_SCALING_FACTOR + PANEL_WIDTH
     WINDOW_HEIGHT = IMAGE_HEIGHT * IMAGE_SCALING_FACTOR
@@ -565,6 +598,7 @@ class MainWindow(QMainWindow):
         self.image_receiver.telemetry_updated.connect(self._on_telemetry_updated)
         self.image_receiver.perception_updated.connect(self._on_perception_updated)
         self.image_receiver.flight_state_updated.connect(self._on_flight_state_updated)
+        self.image_receiver.tracking_distance_updated.connect(self._on_tracking_distance_updated)
         self.image_receiver.start()
 
         self.statusBar().showMessage("Initializing...")
@@ -740,6 +774,7 @@ class MainWindow(QMainWindow):
         _add_section("VISION")
         _add_row("Hand", "hand")
         _add_row("Gesture", "gesture")
+        _add_row("Distance", "dist")
 
         tele_layout.addStretch()
         return tele_panel
@@ -887,6 +922,7 @@ class MainWindow(QMainWindow):
 
     @Slot(str)
     def _on_flight_state_updated(self, state: str):
+        """Update the flight-state label with a colour-coded indicator matching the current FlightState name."""
         lbl = self._tele_labels.get("state")
         if lbl:
             color = {
@@ -901,13 +937,14 @@ class MainWindow(QMainWindow):
 
     @Slot(bool, str, float)
     def _on_perception_updated(self, hand_detected: bool, gesture: str, confidence: float):
+        """Refresh the hand-detection and gesture sidebar labels based on the latest perception result."""
         hand_lbl = self._tele_labels.get("hand")
         if hand_lbl:
             if hand_detected:
-                hand_lbl.setText("● detected")
+                hand_lbl.setText("detected")
                 hand_lbl.setStyleSheet("color: #4ade80;")
             else:
-                hand_lbl.setText("● lost")
+                hand_lbl.setText("none")
                 hand_lbl.setStyleSheet("color: #f87171;")
         gesture_lbl = self._tele_labels.get("gesture")
         if gesture_lbl:
@@ -915,6 +952,18 @@ class MainWindow(QMainWindow):
                 gesture_lbl.setText(f"{gesture} {confidence:.0%}")
             else:
                 gesture_lbl.setText("—")
+
+    @Slot(float)
+    def _on_tracking_distance_updated(self, dist: float):
+        """Update the distance sidebar label; hides the value (dash) when not actively tracking."""
+        lbl = self._tele_labels.get("dist")
+        if lbl:
+            if dist > 0:
+                lbl.setText(f"{dist:.2f} m")
+                lbl.setStyleSheet("color: #fb923c;")
+            else:
+                lbl.setText("—")
+                lbl.setStyleSheet("color: #aaa;")
 
     def _on_toggle_blackboard(self, key: str, enabled: bool) -> None:
         self.image_receiver.blackboard_write(self.blackboard_writer, key, enabled)

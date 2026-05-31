@@ -1,3 +1,9 @@
+"""Typed blackboard field definitions for the iceoryx2 /config service.
+
+Each entry in CONFIG maps a parameter name to a BlackboardField that carries
+its integer key, ctypes type, and default value.
+"""
+
 import ctypes
 from dataclasses import dataclass
 
@@ -23,12 +29,15 @@ from client.common.constants import (
 
 @dataclass
 class BlackboardField:
+    """Descriptor for a single blackboard entry: its numeric key, ctypes type, and default value."""
+
     key: object
     value_type: object
     default: object
 
 
 def _bb(key, c_type, default):
+    """Build a BlackboardField, wrapping key and default in their respective ctypes."""
     return BlackboardField(
         key=ctypes.c_uint64(key),
         value_type=c_type,

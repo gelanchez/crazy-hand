@@ -1,3 +1,5 @@
+"""Flight state machine that translates keyboard commands and perception data into ActionData setpoints."""
+
 import logging
 import time
 
@@ -44,6 +46,8 @@ NODE_NAME = "control_node"
 
 
 class ControlNode(Node):
+    """ROS-style node that owns the flight state machine and publishes ActionData each control cycle."""
+
     def __init__(self, level=logging.INFO):
         super().__init__(NODE_NAME, level=level)
         self._state = FlightState.IDLE
@@ -70,18 +74,28 @@ class ControlNode(Node):
         self._motor_test_end: float = 0.0
         self._thrust: int = 0
 
+        self._estimated_distance: float = 0.0
+        self._last_gesture: str = "NONE"
+
         self.blackboard_reader = None
 
     def _bb(self, key: str, fallback):
+        """Read a tunable parameter from the shared blackboard, returning fallback if unavailable."""
         if self.blackboard_reader is None:
             return fallback
         return self.blackboard_read(self.blackboard_reader, key)
 
     def _handle_gesture(self, perception):
+        """Dispatch a gesture command on its rising edge, ignoring repeated frames of the same gesture."""
         if not perception.hand_detected:
+            self._last_gesture = "NONE"
             return
 
         gesture = perception.gesture_name.rstrip(b"\x00").decode("utf-8")
+
+        if gesture == self._last_gesture:
+            return  # rising-edge only — don't re-fire while same gesture held
+        self._last_gesture = gesture
 
         if gesture == "Thumb_Down" and self._state in (
             FlightState.AIRBORNE,
@@ -94,7 +108,32 @@ class ControlNode(Node):
             self._publish_action(ActionSource.GESTURE)
             self.logger.info("LAND commanded by gesture")
 
+        elif gesture == "Thumb_Up" and self._state == FlightState.IDLE:
+            self._hover["zdistance"] = DEFAULT_HEIGHT
+            self._state = FlightState.TRACKING
+            self._flight_command = FlightCommand.TAKEOFF
+            self._publish_action(ActionSource.GESTURE)
+            self.logger.info("TAKEOFF commanded by gesture")
+
+        elif gesture == "Victory":
+            if self._state == FlightState.AIRBORNE:
+                self._state = FlightState.TRACKING
+                self._flight_command = FlightCommand.TOGGLE_TRACKING
+                self._hover["vx"] = self._hover["vy"] = 0.0
+                self._publish_action(ActionSource.GESTURE)
+                self.logger.info("TRACKING mode ON by gesture")
+            elif self._state == FlightState.TRACKING:
+                self._state = FlightState.AIRBORNE
+                self._flight_command = FlightCommand.TOGGLE_TRACKING
+                self._hover["vx"] = self._hover["vy"] = 0.0
+                self._no_hand_frames = 0
+                self._ema_x.reset()
+                self._ema_y.reset()
+                self._publish_action(ActionSource.GESTURE)
+                self.logger.info("TRACKING mode OFF by gesture")
+
     def _apply_tracking(self, perception):
+        """P-controller that maps EMA-smoothed hand position and span to lateral, altitude, and forward velocity."""
         if not perception.hand_detected:
             self._no_hand_frames += 1
             if self._no_hand_frames >= TRACKING_LOSS_FRAMES:
@@ -140,10 +179,11 @@ class ControlNode(Node):
         if tracking_distance > 0 and perception.hand_span > 0:
             tracking_dist_scale = self._bb("tracking_distance_scale", TRACKING_DISTANCE_SCALE)
             hand_span_at_1m = self._bb("tracking_hand_span_at_1m", TRACKING_HAND_SPAN_AT_1M)
-            estimated_distance = hand_span_at_1m / perception.hand_span
-            error_d = estimated_distance - tracking_distance
+            self._estimated_distance = hand_span_at_1m / perception.hand_span
+            error_d = self._estimated_distance - tracking_distance
             vx = max(-speed_cap, min(speed_cap, tracking_dist_scale * error_d))
         else:
+            self._estimated_distance = 0.0
             vx = 0.0
 
         self._hover["vx"] = vx
@@ -158,6 +198,7 @@ class ControlNode(Node):
         )
 
     def _process_perception(self):
+        """Drain all pending perception samples and dispatch gesture handling and tracking updates."""
         while True:
             try:
                 sample = self.perception_port.subscriber.receive()
@@ -179,6 +220,7 @@ class ControlNode(Node):
             del sample
 
     def _tick_landing(self):
+        """Decrement altitude at LAND_RATE each tick until LAND_CUTOFF is reached, then cut motors."""
         now = time.monotonic()
         dt = now - self._last_land_tick
         self._last_land_tick = now
@@ -190,6 +232,7 @@ class ControlNode(Node):
         self._publish_action(self._landing_source)
 
     def _tick_motor_test(self):
+        """End the motor-test sequence once its fixed duration has elapsed and return to IDLE."""
         if time.monotonic() >= self._motor_test_end:
             # Test done — one final publish to push state=IDLE back to wifi_node
             self._motor_test_end = 0.0
@@ -202,6 +245,7 @@ class ControlNode(Node):
         # no repeated notifications needed (avoids flooding iceoryx2 listener queue)
 
     def _publish_action(self, source: ActionSource = ActionSource.KEYBOARD):
+        """Build an ActionData payload from current hover state and publish it to the action service."""
         try:
             sample = self.action_port.publisher.loan_uninit()
             payload = sample.payload().contents
@@ -221,6 +265,7 @@ class ControlNode(Node):
             )
             payload.ema_x = self._ema_x.value or 0.0
             payload.ema_y = self._ema_y.value or 0.0
+            payload.estimated_distance = self._estimated_distance
             payload.thrust = self._thrust
             command_name = self._flight_command.name
             sample.assume_init().send()
@@ -234,6 +279,7 @@ class ControlNode(Node):
             self.logger.warning(f"Action publish failed: {e}")
 
     def _process_command(self):
+        """Drain all pending keyboard commands, advance the flight state machine, and publish if anything changed."""
         changed = False
         while True:
             try:

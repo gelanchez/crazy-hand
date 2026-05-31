@@ -1,3 +1,5 @@
+"""ROS2-style node that runs MediaPipe gesture recognition and publishes hand tracking data with annotated image overlays."""
+
 import ctypes
 import logging
 import time
@@ -55,6 +57,8 @@ def _to_c_char_array(value: str, size: int = GESTURE_NAME_SIZE) -> bytes:
 
 
 class VisionNode(Node):
+    """Subscribes to raw camera frames, runs MediaPipe gesture inference, and publishes annotated perception data."""
+
     def __init__(self, level=logging.DEBUG):
         super().__init__(NODE_NAME, level=level)
 
@@ -91,6 +95,12 @@ class VisionNode(Node):
 
     # --- Stable gesture resolution ---
     def _update_gesture(self, candidate, confidence):
+        """Apply debounce and hysteresis to raw gesture detections.
+
+        A candidate must remain stable for ``_debounce_ms`` before it is
+        confirmed, and confirmed gestures are locked for ``_hysteresis_ms``
+        to prevent rapid switching between labels.
+        """
         now = time.time() * 1000  # ms
 
         # --- Confidence filter ---

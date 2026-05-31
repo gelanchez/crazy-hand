@@ -1,3 +1,4 @@
+"""ROS2-style node that connects to a Crazyflie over Wi-Fi, streams camera frames via CPX, and publishes telemetry and flight-command interfaces over iceoryx2."""
 import ctypes
 import logging
 import math
@@ -68,6 +69,8 @@ def _fill_sim_frame(image: np.ndarray, frame_id: int, _y: np.ndarray, _x: np.nda
 
 
 class WifiNode(Node):
+    """Manages the Crazyflie Wi-Fi connection, image streaming, telemetry, and flight commands."""
+
     # Seconds without a frame before watchdog reconnects.
     # GAP8 may need up to ~10 s to reinit camera and start streaming after
     # a power-on or after a CPX reconnect; 30 s avoids thrashing.
@@ -221,6 +224,7 @@ class WifiNode(Node):
             pass
 
     def _receive_images(self) -> None:
+        """Receive CPX APP packets from GAP8, reassemble JPEG/RAW frames, and publish them."""
         self.logger.info("Image reception thread started")
         _no_packet_count = 0
         while self.running:
@@ -279,6 +283,7 @@ class WifiNode(Node):
                     self.logger.error(f"Error assembling image: {e}")
 
     def _publish_frame(self, frame_data: bytes, fmt: int) -> None:
+        """Decode a raw or JPEG frame and publish it to the image iceoryx2 port."""
         if fmt == 1:  # JPEG
             try:
                 arr = np.frombuffer(frame_data, dtype=np.uint8)
@@ -357,6 +362,7 @@ class WifiNode(Node):
     # --- Telemetry ---
 
     def _telemetry_loop(self) -> None:
+        """Publish a TelemetryData sample at ~10 Hz, sourced from cflib logs or sim state."""
         # Note: telemetry_port is created in run() before this thread starts
         while self.running:
             try:
@@ -398,6 +404,11 @@ class WifiNode(Node):
     # --- Flight control ---
 
     def _action_loop(self) -> None:
+        """Consume FlightCommand events and drive the CF commander at ~20 Hz.
+
+        Sends unlock/hover setpoints when flying, motor-test setpoints when testing,
+        and keep-alive zero-setpoints while grounded to prevent EKF drift.
+        """
         self.logger.info("Action loop started")
         flying = False
         unlocking = 0  # countdown: sends thrust=0 packets before first hover setpoint (~500 ms)
@@ -517,6 +528,7 @@ class WifiNode(Node):
     # --- Crazyflie callbacks ---
 
     def _on_console(self, text):
+        """Buffer Crazyflie console characters and forward complete lines to the Python logger."""
         self._console_buffer += text
         if "\n" in self._console_buffer:
             lines = self._console_buffer.split("\n")
@@ -601,13 +613,18 @@ class WifiNode(Node):
                 self.logger.warning(f"Log config '{name}' setup failed: {e}")
 
     def _on_connection_failed(self, uri: str, msg: str) -> None:
+        """Handle a failed cflib connection attempt, logging only the summary line from the error."""
         # msg from cflib includes a full embedded traceback — log only the summary line
         summary = msg.splitlines()[0] if msg else "unknown error"
         self.logger.warning(f"Crazyflie connection failed ({uri}): {summary}")
         self._cf_connected.set()
 
     def _on_disconnected(self, uri: str) -> None:
+        """Handle a cflib disconnect event and accelerate the image-watchdog reconnect timer."""
         self.logger.info(f"Crazyflie disconnected: {uri}")
+        # Fast-path image watchdog — reconnect in ~5 s rather than _NO_IMAGE_TIMEOUT
+        if not self._reconnecting:
+            self._last_frame_time = time.time() - (self._NO_IMAGE_TIMEOUT - 5.0)
 
     # --- Connection ---
 
@@ -689,6 +706,7 @@ class WifiNode(Node):
 
     @staticmethod
     def _check_connection(host=CRAZYFLIE_IP):
+        """Return True if the drone host responds to a single ICMP ping within 1 second."""
         param = "-n" if platform.system().lower() == "windows" else "-c"
         command = ["ping", param, "1", "-W", "1", host]
         return subprocess.call(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0
@@ -820,6 +838,7 @@ class WifiNode(Node):
             })
 
     def _run_sim(self) -> None:
+        """Run the simulation loop: publish synthetic gradient frames and drive telemetry/action threads."""
         self._sim_start_time = time.time()
         _y = np.arange(IMAGE_HEIGHT, dtype=np.uint16).reshape(-1, 1)
         _x = np.arange(IMAGE_WIDTH, dtype=np.uint16).reshape(1, -1)
@@ -912,6 +931,7 @@ class WifiNode(Node):
     # --- Entry point ---
 
     def run(self):
+        """Set up iceoryx2 ports and enter the main node loop (hardware or simulation)."""
         try:
             # INITIALIZE ICEORYX2
             self.image_port = self.create_publisher(ServiceName.IMAGE, ImageData, EventId.IMAGE_READY)

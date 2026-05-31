@@ -1,3 +1,5 @@
+"""Base Node class providing iceoryx2 publish/subscribe, event, and blackboard wrappers for building inter-process communication nodes."""
+
 import ctypes
 import logging
 import signal
@@ -12,6 +14,8 @@ from client.common.utils import setup_logging
 
 @dataclass
 class PublisherPort:
+    """Holds the iceoryx2 publisher, notifier, and event ID for a publish/subscribe service."""
+
     publisher: object
     notifier: object
     event: object
@@ -19,6 +23,8 @@ class PublisherPort:
 
 @dataclass
 class SubscriberPort:
+    """Holds the iceoryx2 subscriber, listener, and event ID for a publish/subscribe service."""
+
     subscriber: object
     listener: object
     event: object
@@ -26,6 +32,8 @@ class SubscriberPort:
 
 @dataclass
 class BlackboardEntry:
+    """Describes a single typed entry in a blackboard service, including its key and ctypes value type."""
+
     key: object
     value_type: object
     entry: object
@@ -33,12 +41,16 @@ class BlackboardEntry:
 
 @dataclass
 class BlackboardPort:
+    """Holds the iceoryx2 blackboard service, the reader/writer port, and a mapping of named entries."""
+
     service: object
     port: object
     entries: dict[str, BlackboardEntry] = field(default_factory=dict)
 
 
 class Node:
+    """Base class for IPC nodes that wraps iceoryx2 pub/sub, event, and blackboard services."""
+
     BLACKBOARD_KEY_TYPE = ctypes.c_uint64
 
     def __init__(self, name, level=logging.INFO, console_level=logging.INFO, handle_signals=True):
@@ -73,6 +85,7 @@ class Node:
         iceoryx2.config.setup_global_config_from_file(iceoryx2.FilePath.new(str(IOX2_CONFIG)))
 
     def create_publisher(self, name, data_type, event_id) -> PublisherPort:
+        """Create a publish/subscribe publisher and an associated event notifier for the given service name."""
         service = (
             self.node.service_builder(iceoryx2.ServiceName.new(name))
             .publish_subscribe(data_type)
@@ -91,6 +104,10 @@ class Node:
         return PublisherPort(publisher=publisher, notifier=notifier, event=event)
 
     def create_subscriber(self, name, data_type, event_id, check_interruption=lambda: False) -> SubscriberPort | None:
+        """Connect to an existing publish/subscribe service, retrying until available or the node stops.
+
+        Returns None if the node stopped or check_interruption returned True before the service appeared.
+        """
         service = None
         while self.running and not check_interruption():
             try:
@@ -130,6 +147,7 @@ class Node:
         return SubscriberPort(subscriber=subscriber, listener=listener, event=event_id)
 
     def create_blackboard_writer(self, name, entries) -> BlackboardPort:
+        """Create a new blackboard service with the given entries and return a writer port."""
         builder = self.node.service_builder(iceoryx2.ServiceName.new(name)).blackboard_creator(Node.BLACKBOARD_KEY_TYPE)
 
         for _, f in entries.items():
@@ -150,6 +168,10 @@ class Node:
         return BlackboardPort(service=service, port=writer, entries=blackboard_entries)
 
     def create_blackboard_reader(self, name, entries, check_interruption=lambda: False) -> BlackboardPort | None:
+        """Open an existing blackboard service for reading, retrying until available or the node stops.
+
+        Returns None if the node stopped or check_interruption returned True before the service appeared.
+        """
         service = None
 
         while self.running and not check_interruption():
@@ -182,6 +204,7 @@ class Node:
 
     @staticmethod
     def blackboard_write(blackboard: BlackboardPort, entry_name: str, value):
+        """Write a value to a named blackboard entry, converting it to the appropriate ctypes type."""
         if entry_name not in blackboard.entries:
             raise KeyError(f"Unknown blackboard entry: {entry_name}")
         blackboard_entry = blackboard.entries[entry_name]
@@ -190,6 +213,7 @@ class Node:
 
     @staticmethod
     def blackboard_read(blackboard: BlackboardPort, entry_name: str):
+        """Read and return the current value of a named blackboard entry, decoded to its Python type."""
         if entry_name not in blackboard.entries:
             raise KeyError(f"Unknown blackboard entry: {entry_name}")
         entry = blackboard.entries[entry_name]
