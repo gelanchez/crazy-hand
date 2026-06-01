@@ -13,11 +13,14 @@ import time
 import tomllib
 from pathlib import Path
 
+import math
+from collections import deque
+
 import click
 import iceoryx2
 import numpy as np
-from PySide6.QtCore import Qt, QThread, QTimer, Signal, Slot
-from PySide6.QtGui import QAction, QFont, QImage, QPixmap
+from PySide6.QtCore import Qt, QPointF, QRectF, QThread, QTimer, Signal, Slot
+from PySide6.QtGui import QAction, QBrush, QColor, QFont, QImage, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -32,7 +35,10 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QProgressBar,
+    QPushButton,
+    QScrollArea,
     QSizePolicy,
+    QTabWidget,
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
@@ -342,6 +348,186 @@ class GuiNode(Node, QThread):
             self.status_changed.emit(APP_STATUS_TEXT[AppStatus.DISCONNECTED])
 
 
+class AttitudeIndicator(QWidget):
+    """Artificial horizon widget: roll shown as horizon tilt, pitch as vertical offset.
+
+    Outer ring changes colour with roll severity: green < 20°, orange 20–40°, red > 40°.
+    Roll arc ticks are labelled at ±30° and ±60°.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(165, 120)
+        self._roll = 0.0
+        self._pitch = 0.0
+
+    def update_attitude(self, roll: float, pitch: float) -> None:
+        if self._roll != roll or self._pitch != pitch:
+            self._roll = roll
+            self._pitch = pitch
+            self.update()
+
+    def paintEvent(self, event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+
+        w, h = self.width(), self.height()
+        cx, cy = w / 2.0, h / 2.0
+        r = min(cx, cy) - 5  # leave room for ring
+
+        # ── Severity ring (no clip) ──────────────────────────────────
+        roll_abs = abs(self._roll)
+        if roll_abs < 20:
+            ring_col = QColor(74, 222, 128)   # green
+        elif roll_abs < 40:
+            ring_col = QColor(251, 146, 60)   # orange
+        else:
+            ring_col = QColor(239, 68, 68)    # red
+        p.setPen(QPen(ring_col, 3))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawEllipse(QPointF(cx, cy), r + 3, r + 3)
+
+        # ── Sky / ground (with clip, rotated) ───────────────────────
+        clip = QPainterPath()
+        clip.addEllipse(QPointF(cx, cy), r, r)
+        p.setClipPath(clip)
+
+        p.translate(cx, cy)
+        p.rotate(-self._roll)
+        pitch_px = self._pitch * r / 30.0  # ±30° range
+
+        p.fillRect(QRectF(-r - 1, -r - 1, (r + 1) * 2, r + 1 + pitch_px), QColor(28, 90, 170))
+        p.fillRect(QRectF(-r - 1, pitch_px, (r + 1) * 2, r + 1), QColor(110, 70, 30))
+
+        # Horizon line
+        p.setPen(QPen(QColor(255, 255, 255), 1))
+        p.drawLine(QPointF(-r, pitch_px), QPointF(r, pitch_px))
+
+        # Pitch ticks (±10°, ±20°)
+        p.setPen(QPen(QColor(255, 255, 255, 160), 1))
+        for deg in (-20, -10, 10, 20):
+            y = pitch_px - deg * r / 30.0
+            hw = 18 if abs(deg) == 20 else 12
+            p.drawLine(QPointF(-hw, y), QPointF(hw, y))
+
+        # ── Overlay (unrotated) ──────────────────────────────────────
+        p.resetTransform()
+        p.setClipping(False)
+        p.translate(cx, cy)
+
+        arc_r = r - 1
+        tick_font = QFont("Monospace", 5)
+        p.setFont(tick_font)
+
+        for tick in (-60, -45, -30, -20, -10, 0, 10, 20, 30, 45, 60):
+            angle_rad = math.radians(-tick - 90)
+            cos_a, sin_a = math.cos(angle_rad), math.sin(angle_rad)
+            x1, y1 = arc_r * cos_a, arc_r * sin_a
+            tl = 8 if tick % 30 == 0 else (5 if tick % 10 == 0 else 4)
+            x2, y2 = (arc_r - tl) * cos_a, (arc_r - tl) * sin_a
+            p.setPen(QPen(QColor(255, 255, 255, 140), 1))
+            p.drawLine(QPointF(x1, y1), QPointF(x2, y2))
+            # Label at ±30° and ±60°
+            if abs(tick) in (30, 60):
+                lx = (arc_r - tl - 10) * cos_a
+                ly = (arc_r - tl - 10) * sin_a
+                p.setPen(QColor(200, 200, 200, 200))
+                p.drawText(QRectF(lx - 8, ly - 5, 16, 10), Qt.AlignmentFlag.AlignCenter, str(abs(tick)))
+
+        # Roll pointer (yellow triangle, rotates with roll)
+        p.save()
+        p.rotate(-self._roll)
+        tri_y = -(arc_r - 1)
+        tri = QPainterPath()
+        tri.moveTo(0, tri_y)
+        tri.lineTo(-4, tri_y + 9)
+        tri.lineTo(4, tri_y + 9)
+        tri.closeSubpath()
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(QColor(255, 220, 0)))
+        p.drawPath(tri)
+        p.restore()
+
+        # Fixed aircraft crosshair
+        p.setPen(QPen(QColor(255, 220, 0), 2))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawLine(QPointF(-28, 0), QPointF(-8, 0))
+        p.drawLine(QPointF(8, 0), QPointF(28, 0))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(QColor(255, 220, 0)))
+        p.drawEllipse(QPointF(0, 0), 3, 3)
+
+        p.end()
+
+
+class PositionTrace(QWidget):
+    """Top-down XY position history display."""
+
+    _MAX_POINTS = 500
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(165, 165)
+        self._points: deque[tuple[float, float]] = deque(maxlen=self._MAX_POINTS)
+
+    def add_point(self, x: float, y: float) -> None:
+        self._points.append((x, y))
+        self.update()
+
+    def clear(self) -> None:
+        self._points.clear()
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        w, h = self.width(), self.height()
+        margin = 12
+
+        p.fillRect(0, 0, w, h, QColor(18, 18, 18))
+
+        p.setPen(QPen(QColor(45, 45, 45), 1))
+        p.drawLine(w // 2, 0, w // 2, h)
+        p.drawLine(0, h // 2, w, h // 2)
+
+        if not self._points:
+            p.setPen(QColor(80, 80, 80))
+            p.setFont(QFont("Monospace", 7))
+            p.drawText(QRectF(0, 0, w, h), Qt.AlignmentFlag.AlignCenter, "No position data")
+            p.end()
+            return
+
+        xs = [pt[0] for pt in self._points]
+        ys = [pt[1] for pt in self._points]
+        span = max(2.0, max(abs(v) for v in xs + ys)) * 1.15
+        scale = (min(w, h) / 2.0 - margin) / span
+
+        def to_screen(x: float, y: float) -> QPointF:
+            return QPointF(w / 2.0 + x * scale, h / 2.0 - y * scale)
+
+        pts = [to_screen(x, y) for x, y in self._points]
+        p.setPen(QPen(QColor(90, 140, 230, 180), 1))
+        for i in range(1, len(pts)):
+            p.drawLine(pts[i - 1], pts[i])
+
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(QColor(240, 80, 80)))
+        p.drawEllipse(pts[-1], 4, 4)
+
+        origin = to_screen(0.0, 0.0)
+        p.setPen(QPen(QColor(80, 80, 80), 1))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawEllipse(origin, 3, 3)
+
+        p.setPen(QColor(70, 70, 70))
+        p.setFont(QFont("Monospace", 7))
+        p.drawText(QRectF(2, h - 14, w - 4, 12), Qt.AlignmentFlag.AlignLeft, f"±{span:.1f} m")
+
+        p.end()
+
+
 class ShortcutsDialog(QDialog):
     """Read-only dialog that displays the keyboard shortcut reference table."""
 
@@ -372,17 +558,19 @@ class ShortcutsDialog(QDialog):
 class SettingsDialog(QDialog):
     """Modal dialog for editing runtime flight, gesture, and tracking parameters via the shared blackboard."""
 
-    def __init__(self, writer, reader, parent=None):
+    def __init__(self, writer, reader, display_state: dict | None = None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Settings")
         self.setMinimumWidth(320)
         self._writer = writer
         self._reader = reader
+        self._display_state = display_state or {}
 
         layout = QVBoxLayout(self)
         layout.addWidget(self._flight_group())
         layout.addWidget(self._gesture_group())
         layout.addWidget(self._tracking_group())
+        layout.addWidget(self._display_group())
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)
@@ -563,6 +751,23 @@ class SettingsDialog(QDialog):
         )
         return group
 
+    def _display_group(self):
+        group = QGroupBox("Display")
+        form = QFormLayout(group)
+        _labels = {
+            "show_attitude": "Attitude indicator",
+            "show_position_trace": "Position trace",
+        }
+        for key, label in _labels.items():
+            if key not in self._display_state:
+                continue
+            getter, setter = self._display_state[key]
+            cb = QCheckBox()
+            cb.setChecked(getter())
+            cb.toggled.connect(setter)
+            form.addRow(f"{label}:", cb)
+        return group
+
 
 class MainWindow(QMainWindow):
     """Main application window containing the live video panel, telemetry sidebar, menus, and keyboard handling."""
@@ -603,6 +808,9 @@ class MainWindow(QMainWindow):
 
         self.statusBar().showMessage("Initializing...")
         self._shortcuts_dialog = ShortcutsDialog(self)
+
+        self._show_attitude = True
+        self._show_position_trace = True
 
         # Menu bar setup
         self._setup_menus()
@@ -687,39 +895,53 @@ class MainWindow(QMainWindow):
         tele_panel.setFixedWidth(MainWindow.PANEL_WIDTH)
         tele_panel.setFrameShape(QFrame.Shape.NoFrame)
         tele_panel.setStyleSheet("#tele_panel { border-left: 1px solid #444; }")
-        tele_layout = QVBoxLayout(tele_panel)
-        tele_layout.setContentsMargins(10, 10, 10, 10)
-        tele_layout.setSpacing(2)
 
         self._tele_labels: dict[str, QLabel] = {}
         val_font = QFont("Monospace", 10)
         val_font.setStyleHint(QFont.StyleHint.Monospace)
 
-        def _add_section(header: str):
+        def _section(layout: QVBoxLayout, header: str):
             h = QLabel(header)
             h.setFont(QFont("Outfit", 9, QFont.Weight.Bold))
             h.setStyleSheet("color: #999; padding-top: 5px; border-top: 1px solid #444;")
-            tele_layout.addWidget(h)
+            layout.addWidget(h)
 
-        def _add_row(label: str, key: str):
-            row_widget = QWidget()
-            row_layout = QHBoxLayout(row_widget)
-            row_layout.setContentsMargins(4, 1, 4, 1)
+        def _row(layout: QVBoxLayout, label: str, key: str):
+            rw = QWidget()
+            rl = QHBoxLayout(rw)
+            rl.setContentsMargins(4, 1, 4, 1)
             lbl = QLabel(label)
             lbl.setFont(val_font)
             lbl.setStyleSheet("color: #aaa;")
             val = QLabel("—")
             val.setFont(val_font)
             val.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            row_layout.addWidget(lbl)
-            row_layout.addStretch()
-            row_layout.addWidget(val)
-            tele_layout.addWidget(row_widget)
+            rl.addWidget(lbl)
+            rl.addStretch()
+            rl.addWidget(val)
+            layout.addWidget(rw)
             self._tele_labels[key] = val
 
-        _add_row("Status", "status")
-        _add_row("FPS", "fps")
-        _add_row("State", "state")
+        def _scrollable(widget: QWidget) -> QScrollArea:
+            sa = QScrollArea()
+            sa.setWidgetResizable(True)
+            sa.setFrameShape(QFrame.Shape.NoFrame)
+            sa.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            sa.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            sa.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            sa.setWidget(widget)
+            return sa
+
+        # ── Flight tab ───────────────────────────────────────────────
+        flight_w = QWidget()
+        fl = QVBoxLayout(flight_w)
+        fl.setContentsMargins(10, 6, 10, 6)
+        fl.setSpacing(2)
+
+        _row(fl, "Status", "status")
+        _row(fl, "FPS", "fps")
+        _row(fl, "State", "state")
+
         self._battery_bar = QProgressBar()
         self._battery_bar.setRange(0, 100)
         self._battery_bar.setValue(0)
@@ -727,56 +949,109 @@ class MainWindow(QMainWindow):
         self._battery_bar.setTextVisible(False)
         self._battery_bar.setContentsMargins(4, 2, 4, 2)
         self._battery_bar.setStyleSheet("""
-            QProgressBar {
-                border: 1px solid #666; border-radius: 2px; background: #1e1e1e;
-            }
+            QProgressBar { border: 1px solid #666; border-radius: 2px; background: #1e1e1e; }
             QProgressBar::chunk { background: #4ade80; border-radius: 1px; }
         """)
-        _add_row("VBat", "vbat")
-        tele_layout.addWidget(self._battery_bar)
+        _row(fl, "VBat", "vbat")
+        fl.addWidget(self._battery_bar)
 
-        _add_section("POSITION (m)")
-        _add_row("X", "x")
-        _add_row("Y", "y")
-        _add_row("Z", "z")
+        _section(fl, "POSITION (m)")
+        _row(fl, "X", "x")
+        _row(fl, "Y", "y")
+        _row(fl, "Z", "z")
 
-        _add_section("VELOCITY (m/s)")
-        _add_row("Vx", "vx")
-        _add_row("Vy", "vy")
-        _add_row("Vz", "vz")
+        _section(fl, "VELOCITY (m/s)")
+        _row(fl, "Vx", "vx")
+        _row(fl, "Vy", "vy")
+        _row(fl, "Vz", "vz")
 
-        _add_section("ATTITUDE (°)")
-        _add_row("Roll", "roll")
-        _add_row("Pitch", "pitch")
-        _add_row("Yaw", "yaw")
+        _section(fl, "ATTITUDE (°)")
+        _row(fl, "Roll", "roll")
+        _row(fl, "Pitch", "pitch")
+        _row(fl, "Yaw", "yaw")
 
-        _add_section("MOTORS (%)")
-        motor_widget = QWidget()
-        motor_grid = QGridLayout(motor_widget)
-        motor_grid.setContentsMargins(4, 1, 4, 1)
-        motor_grid.setVerticalSpacing(2)
-        motor_grid.setHorizontalSpacing(8)
-        motor_grid.setColumnStretch(2, 1)
+        _section(fl, "MOTORS (%)")
+        motor_w = QWidget()
+        mg = QGridLayout(motor_w)
+        mg.setContentsMargins(4, 1, 4, 1)
+        mg.setVerticalSpacing(2)
+        mg.setHorizontalSpacing(8)
+        mg.setColumnStretch(2, 1)
         for i, key in enumerate(("m1", "m2", "m3", "m4")):
-            row, col = divmod(i, 2)
-            grid_col = col * 3
+            r, c = divmod(i, 2)
+            gc = c * 3
             mlbl = QLabel(f"M{i + 1}")
             mlbl.setFont(val_font)
             mlbl.setStyleSheet("color: #aaa;")
             mval = QLabel("—")
             mval.setFont(val_font)
             mval.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            motor_grid.addWidget(mlbl, row, grid_col)
-            motor_grid.addWidget(mval, row, grid_col + 1)
+            mg.addWidget(mlbl, r, gc)
+            mg.addWidget(mval, r, gc + 1)
             self._tele_labels[key] = mval
-        tele_layout.addWidget(motor_widget)
+        fl.addWidget(motor_w)
+        fl.addStretch()
 
-        _add_section("VISION")
-        _add_row("Hand", "hand")
-        _add_row("Gesture", "gesture")
-        _add_row("Distance", "dist")
+        # ── Nav tab ──────────────────────────────────────────────────
+        nav_w = QWidget()
+        nl = QVBoxLayout(nav_w)
+        nl.setContentsMargins(10, 6, 10, 6)
+        nl.setSpacing(4)
 
-        tele_layout.addStretch()
+        stop_btn = QPushButton("■  EMERGENCY STOP")
+        stop_btn.setFixedHeight(36)
+        stop_btn.setStyleSheet("""
+            QPushButton {
+                background: #dc2626; color: white; font-weight: bold;
+                font-size: 12px; border-radius: 4px; border: none;
+            }
+            QPushButton:hover  { background: #ef4444; }
+            QPushButton:pressed { background: #b91c1c; }
+        """)
+        stop_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        stop_btn.clicked.connect(lambda: self._publish_command(KeyCode.ESC, True))
+        nl.addWidget(stop_btn)
+
+        att_hdr = QLabel("ATTITUDE")
+        att_hdr.setFont(QFont("Outfit", 9, QFont.Weight.Bold))
+        att_hdr.setStyleSheet("color: #999; padding-top: 6px;")
+        nl.addWidget(att_hdr)
+        self.attitude_widget = AttitudeIndicator()
+        self.attitude_widget.setVisible(self._show_attitude)
+        nl.addWidget(self.attitude_widget)
+
+        trace_hdr = QLabel("POSITION TRACE")
+        trace_hdr.setFont(QFont("Outfit", 9, QFont.Weight.Bold))
+        trace_hdr.setStyleSheet("color: #999; padding-top: 6px;")
+        nl.addWidget(trace_hdr)
+        self.position_trace = PositionTrace()
+        self.position_trace.setVisible(self._show_position_trace)
+        nl.addWidget(self.position_trace)
+        nl.addStretch()
+
+        # ── Vision tab ───────────────────────────────────────────────
+        vision_w = QWidget()
+        vl = QVBoxLayout(vision_w)
+        vl.setContentsMargins(10, 6, 10, 6)
+        vl.setSpacing(2)
+
+        _row(vl, "Hand", "hand")
+        _row(vl, "Gesture", "gesture")
+        _row(vl, "Distance", "dist")
+        vl.addStretch()
+
+        # ── Assemble ─────────────────────────────────────────────────
+        tabs = QTabWidget()
+        tabs.setDocumentMode(True)
+        tabs.tabBar().setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        tabs.addTab(_scrollable(flight_w), "Flight")
+        tabs.addTab(_scrollable(nav_w), "Nav")
+        tabs.addTab(_scrollable(vision_w), "Vision")
+
+        outer = QVBoxLayout(tele_panel)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(tabs)
+
         return tele_panel
 
     def _publish_command(self, key: KeyCode, is_pressed: bool, shift: bool = False):
@@ -842,15 +1117,19 @@ class MainWindow(QMainWindow):
             _color("fps", "")
 
         if live:
-            _set("x", f"{data.get('x', 0.0):+.2f}")
-            _set("y", f"{data.get('y', 0.0):+.2f}")
+            x, y = data.get("x", 0.0), data.get("y", 0.0)
+            roll, pitch = data.get("roll", 0.0), data.get("pitch", 0.0)
+            _set("x", f"{x:+.2f}")
+            _set("y", f"{y:+.2f}")
             _set("z", f"{data.get('z', 0.0):+.2f}")
             _set("vx", f"{data.get('vx', 0.0):+.2f}")
             _set("vy", f"{data.get('vy', 0.0):+.2f}")
             _set("vz", f"{data.get('vz', 0.0):+.2f}")
-            _set("roll", f"{data.get('roll', 0.0):+.1f}°")
-            _set("pitch", f"{data.get('pitch', 0.0):+.1f}°")
+            _set("roll", f"{roll:+.1f}°")
+            _set("pitch", f"{pitch:+.1f}°")
             _set("yaw", f"{data.get('yaw', 0.0):+.1f}°")
+            self.attitude_widget.update_attitude(roll, pitch)
+            self.position_trace.add_point(x, y)
             for key in ("m1", "m2", "m3", "m4"):
                 pct = data.get(key, 0)
                 _set(key, f"{pct}%" if pct > 0 else "0%")
@@ -917,8 +1196,20 @@ class MainWindow(QMainWindow):
         self.video_label.setPixmap(pixmap)
 
     def _show_settings(self):
-        dlg = SettingsDialog(self.blackboard_writer, self.blackboard_reader, self)
+        display_state = {
+            "show_attitude": (lambda: self._show_attitude, self._set_show_attitude),
+            "show_position_trace": (lambda: self._show_position_trace, self._set_show_position_trace),
+        }
+        dlg = SettingsDialog(self.blackboard_writer, self.blackboard_reader, display_state, self)
         dlg.exec()
+
+    def _set_show_attitude(self, show: bool) -> None:
+        self._show_attitude = show
+        self.attitude_widget.setVisible(show)
+
+    def _set_show_position_trace(self, show: bool) -> None:
+        self._show_position_trace = show
+        self.position_trace.setVisible(show)
 
     @Slot(str)
     def _on_flight_state_updated(self, state: str):
@@ -934,6 +1225,8 @@ class MainWindow(QMainWindow):
             }.get(state, "#888")
             lbl.setText(state)
             lbl.setStyleSheet(f"color: {color};")
+        if state == "IDLE":
+            self.position_trace.clear()
 
     @Slot(bool, str, float)
     def _on_perception_updated(self, hand_detected: bool, gesture: str, confidence: float):

@@ -77,6 +77,10 @@ class ControlNode(Node):
         self._estimated_distance: float = 0.0
         self._last_gesture: str = "NONE"
 
+        # True while the corresponding arrow key is held — blocks tracking from overriding that axis
+        self._key_override_vx: bool = False
+        self._key_override_vy: bool = False
+
         self.blackboard_reader = None
 
     def _bb(self, key: str, fallback):
@@ -134,14 +138,25 @@ class ControlNode(Node):
 
     def _apply_tracking(self, perception):
         """P-controller that maps EMA-smoothed hand position and span to lateral, altitude, and forward velocity."""
+        if not self._bb("process_images", False):
+            # process_images turned off while airborne in TRACKING — fall back to AIRBORNE
+            self._state = FlightState.AIRBORNE
+            self._hover["vx"] = self._hover["vy"] = self._hover["yawrate"] = 0.0
+            self._flight_command = FlightCommand.TOGGLE_TRACKING
+            self._publish_action()
+            self.logger.info("process_images disabled — exited tracking mode")
+            return
+
         if not perception.hand_detected:
             self._no_hand_frames += 1
             if self._no_hand_frames >= TRACKING_LOSS_FRAMES:
                 # Hand truly lost — stop motion and reset EMA
                 self._ema_x.reset()
                 self._ema_y.reset()
-                self._hover["vx"] = 0.0
-                self._hover["vy"] = 0.0
+                if not self._key_override_vx:
+                    self._hover["vx"] = 0.0
+                if not self._key_override_vy:
+                    self._hover["vy"] = 0.0
                 self._publish_action(ActionSource.TRACKING)
                 self.logger.debug("Tracking: hand lost")
             return
@@ -186,8 +201,10 @@ class ControlNode(Node):
             self._estimated_distance = 0.0
             vx = 0.0
 
-        self._hover["vx"] = vx
-        self._hover["vy"] = vy
+        if not self._key_override_vx:
+            self._hover["vx"] = vx
+        if not self._key_override_vy:
+            self._hover["vy"] = vy
         self._publish_action(ActionSource.TRACKING)
 
         self.logger.debug(
@@ -313,9 +330,9 @@ class ControlNode(Node):
                 case (True, KeyCode.SPACE):
                     if self._state == FlightState.IDLE:
                         self._hover["zdistance"] = DEFAULT_HEIGHT
-                        self._state = FlightState.TRACKING
+                        self._state = FlightState.TRACKING if self._bb("process_images", False) else FlightState.AIRBORNE
                         self._flight_command = FlightCommand.TAKEOFF
-                        self.logger.info("TAKEOFF commanded")
+                        self.logger.info(f"TAKEOFF commanded → {self._state.name}")
                         changed = True
                     elif self._state == FlightState.LANDING:
                         self._state = FlightState.TRACKING
@@ -338,11 +355,13 @@ class ControlNode(Node):
                     self._hover["vx"] = self._hover["vy"] = self._hover["yawrate"] = 0.0
                     self._hover["zdistance"] = DEFAULT_HEIGHT
                     self._flight_command = FlightCommand.EMERGENCY_STOP
+                    self._key_override_vx = False
+                    self._key_override_vy = False
                     changed = True
 
                 # --- Toggle tracking ---
                 case (True, KeyCode.T):
-                    if self._state == FlightState.AIRBORNE:
+                    if self._state == FlightState.AIRBORNE and self._bb("process_images", False):
                         self._state = FlightState.TRACKING
                         self._flight_command = FlightCommand.TOGGLE_TRACKING
                         self._hover["vx"] = 0.0
@@ -362,15 +381,19 @@ class ControlNode(Node):
 
                 # --- Movement (only when airborne) ---
                 case (True, KeyCode.UP) if airborne:
+                    self._key_override_vx = True
                     self._hover["vx"] = speed
                     changed = True
                 case (True, KeyCode.DOWN) if airborne:
+                    self._key_override_vx = True
                     self._hover["vx"] = -speed
                     changed = True
                 case (True, KeyCode.LEFT) if airborne:
+                    self._key_override_vy = True
                     self._hover["vy"] = speed
                     changed = True
                 case (True, KeyCode.RIGHT) if airborne:
+                    self._key_override_vy = True
                     self._hover["vy"] = -speed
                     changed = True
                 case (True, KeyCode.A) if airborne:
@@ -391,6 +414,8 @@ class ControlNode(Node):
                 # --- Stabilise ---
                 case (True, KeyCode.C) if airborne:
                     self._hover["vx"] = self._hover["vy"] = self._hover["yawrate"] = 0.0
+                    self._key_override_vx = False
+                    self._key_override_vy = False
                     self.logger.info("Stabilised")
                     changed = True
 
@@ -405,9 +430,11 @@ class ControlNode(Node):
 
                 # --- Zero on release ---
                 case (False, KeyCode.UP | KeyCode.DOWN):
+                    self._key_override_vx = False
                     self._hover["vx"] = 0.0
                     changed = True
                 case (False, KeyCode.LEFT | KeyCode.RIGHT):
+                    self._key_override_vy = False
                     self._hover["vy"] = 0.0
                     changed = True
                 case (False, KeyCode.A | KeyCode.D):
