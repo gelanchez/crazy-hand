@@ -251,15 +251,12 @@ class ControlNode(Node):
     def _tick_motor_test(self):
         """End the motor-test sequence once its fixed duration has elapsed and return to IDLE."""
         if time.monotonic() >= self._motor_test_end:
-            # Test done — one final publish to push state=IDLE back to wifi_node
             self._motor_test_end = 0.0
             self._thrust = 0
             self._state = FlightState.IDLE
             self._flight_command = FlightCommand.NONE
             self._publish_action()
             self.logger.info("Motor test complete")
-        # else: still active — wifi_node spins motors based on flight_state=MOTOR_TESTING;
-        # no repeated notifications needed (avoids flooding iceoryx2 listener queue)
 
     def _publish_action(self, source: ActionSource = ActionSource.KEYBOARD):
         """Build an ActionData payload from current hover state and publish it to the action service."""

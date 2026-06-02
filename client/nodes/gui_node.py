@@ -6,20 +6,19 @@ update the UI.
 """
 
 import logging
+import math
 import os
 import signal
 import sys
 import time
 import tomllib
-from pathlib import Path
-
-import math
 from collections import deque
+from pathlib import Path
 
 import click
 import iceoryx2
 import numpy as np
-from PySide6.QtCore import Qt, QPointF, QRectF, QThread, QTimer, Signal, Slot
+from PySide6.QtCore import QPointF, QRectF, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QAction, QBrush, QColor, QFont, QImage, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -38,10 +37,11 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
-    QTabWidget,
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
+    QToolBar,
     QVBoxLayout,
     QWidget,
 )
@@ -52,6 +52,8 @@ from client.common.constants import (
     IMAGE_SCALING_FACTOR,
     IMAGE_SIZE,
     IMAGE_WIDTH,
+    MAX_ALTITUDE,
+    MIN_ALTITUDE,
     AppStatus,
     EventId,
     FlightState,
@@ -97,18 +99,24 @@ APP_STATUS_TEXT = {
 _FPS_GREEN = 7
 _FPS_ORANGE = 4
 
+# Battery voltage levels (V)
+_VBAT_MAX = 4.2  # fully charged
+_VBAT_NOMINAL = 3.7  # nominal / colour gradient inflection
+_VBAT_CRIT = 2.9  # enter red critical warning (clears at _VBAT_CRIT + _VBAT_HYSTERESIS)
+_VBAT_HYSTERESIS = 0.1
+
 
 def _battery_color(vbat: float) -> str:
-    """Return a CSS hex colour interpolated from red (3.0 V) through orange (3.7 V) to green (4.2 V)."""
-    if vbat >= 3.7:
-        t = min(1.0, (vbat - 3.7) / (4.2 - 3.7))
+    """Return CSS hex colour: red at _VBAT_CRIT → orange at _VBAT_NOMINAL → green at _VBAT_MAX."""
+    if vbat >= _VBAT_NOMINAL:
+        t = min(1.0, (vbat - _VBAT_NOMINAL) / (_VBAT_MAX - _VBAT_NOMINAL))
         r, g, b = (
             round(251 + (74 - 251) * t),
             round(146 + (222 - 146) * t),
             round(60 + (128 - 60) * t),
         )
     else:
-        t = max(0.0, (vbat - 3.0) / (3.7 - 3.0))
+        t = max(0.0, (vbat - _VBAT_CRIT) / (_VBAT_NOMINAL - _VBAT_CRIT))
         r, g, b = (
             round(239 + (251 - 239) * t),
             round(68 + (146 - 68) * t),
@@ -142,8 +150,8 @@ class GuiNode(Node, QThread):
     image_received = Signal(object)
     telemetry_updated = Signal(dict)
     perception_updated = Signal(bool, str, float)  # hand_detected, gesture, confidence
-    flight_state_updated = Signal(str)              # FlightState name
-    tracking_distance_updated = Signal(float)       # estimated distance m (0.0 = not tracking)
+    flight_state_updated = Signal(str)  # FlightState name
+    tracking_distance_updated = Signal(float)  # estimated distance m (0.0 = not tracking)
 
     def __init__(self, parent=None):
         QThread.__init__(self, parent)
@@ -379,11 +387,11 @@ class AttitudeIndicator(QWidget):
         # ── Severity ring (no clip) ──────────────────────────────────
         roll_abs = abs(self._roll)
         if roll_abs < 20:
-            ring_col = QColor(74, 222, 128)   # green
+            ring_col = QColor(74, 222, 128)  # green
         elif roll_abs < 40:
-            ring_col = QColor(251, 146, 60)   # orange
+            ring_col = QColor(251, 146, 60)  # orange
         else:
-            ring_col = QColor(239, 68, 68)    # red
+            ring_col = QColor(239, 68, 68)  # red
         p.setPen(QPen(ring_col, 3))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawEllipse(QPointF(cx, cy), r + 3, r + 3)
@@ -468,11 +476,16 @@ class PositionTrace(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedSize(165, 165)
+        self.setFixedSize(195, 195)
         self._points: deque[tuple[float, float]] = deque(maxlen=self._MAX_POINTS)
+        self._yaw: float = 0.0
 
     def add_point(self, x: float, y: float) -> None:
         self._points.append((x, y))
+        self.update()
+
+    def update_yaw(self, yaw: float) -> None:
+        self._yaw = yaw
         self.update()
 
     def clear(self) -> None:
@@ -516,6 +529,27 @@ class PositionTrace(QWidget):
         p.setBrush(QBrush(QColor(240, 80, 80)))
         p.drawEllipse(pts[-1], 4, 4)
 
+        # Yaw arrow at current position (yaw=0 → north/up in map frame)
+        arrow_len = 12.0
+        yaw_rad = math.radians(-self._yaw)  # negate: CW yaw → screen coords
+        ax = pts[-1].x() + arrow_len * math.sin(yaw_rad)
+        ay = pts[-1].y() - arrow_len * math.cos(yaw_rad)
+        p.setPen(QPen(QColor(255, 220, 0), 2))
+        p.drawLine(pts[-1], QPointF(ax, ay))
+        # Arrowhead
+        tip = QPointF(ax, ay)
+        side_len = 5.0
+        left_rad = yaw_rad - 2.5
+        right_rad = yaw_rad + 2.5
+        head = QPainterPath()
+        head.moveTo(tip)
+        head.lineTo(tip.x() - side_len * math.sin(left_rad), tip.y() + side_len * math.cos(left_rad))
+        head.lineTo(tip.x() - side_len * math.sin(right_rad), tip.y() + side_len * math.cos(right_rad))
+        head.closeSubpath()
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(QColor(255, 220, 0)))
+        p.drawPath(head)
+
         origin = to_screen(0.0, 0.0)
         p.setPen(QPen(QColor(80, 80, 80), 1))
         p.setBrush(Qt.BrushStyle.NoBrush)
@@ -524,6 +558,80 @@ class PositionTrace(QWidget):
         p.setPen(QColor(70, 70, 70))
         p.setFont(QFont("Monospace", 7))
         p.drawText(QRectF(2, h - 14, w - 4, 12), Qt.AlignmentFlag.AlignLeft, f"±{span:.1f} m")
+
+        p.end()
+
+
+class AltitudeBar(QWidget):
+    """Thin vertical bar showing current altitude vs min/max limits."""
+
+    _WIDTH = 16
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedWidth(self._WIDTH)
+        self.setMinimumHeight(60)
+        self._z = 0.0
+        self._z_min = MIN_ALTITUDE
+        self._z_max = MAX_ALTITUDE
+        self._live = False
+
+    def update_altitude(self, z: float, z_min: float, z_max: float, live: bool) -> None:
+        if self._z != z or self._z_min != z_min or self._z_max != z_max or self._live != live:
+            self._z = z
+            self._z_min = z_min
+            self._z_max = z_max
+            self._live = live
+            self.update()
+
+    def paintEvent(self, event) -> None:
+        p = QPainter(self)
+        w, h = self.width(), self.height()
+        margin = 4
+
+        p.fillRect(0, 0, w, h, QColor(18, 18, 18))
+
+        inner_h = h - 2 * margin
+        if inner_h <= 0:
+            p.end()
+            return
+
+        span = max(0.01, self._z_max - self._z_min)
+
+        def to_y(z: float) -> float:
+            frac = max(0.0, min(1.0, (z - self._z_min) / span))
+            return margin + inner_h * (1.0 - frac)
+
+        # Fill from bottom to current Z
+        if self._live and self._z > self._z_min:
+            fill_top = to_y(self._z)
+            fill_bot = to_y(self._z_min)
+            frac = (self._z - self._z_min) / span
+            if frac < 0.4:
+                fill_color = QColor(74, 222, 128)
+            elif frac < 0.8:
+                fill_color = QColor(251, 146, 60)
+            else:
+                fill_color = QColor(239, 68, 68)
+            p.fillRect(2, int(fill_top), w - 4, int(fill_bot - fill_top), fill_color)
+
+        # Border
+        p.setPen(QPen(QColor(80, 80, 80), 1))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRect(1, margin, w - 2, inner_h)
+
+        # Min/max tick lines
+        p.setPen(QPen(QColor(100, 100, 100), 1))
+        y_max = int(to_y(self._z_max))
+        y_min = int(to_y(self._z_min))
+        p.drawLine(0, y_max, w, y_max)
+        p.drawLine(0, y_min, w, y_min)
+
+        # Current level line
+        if self._live:
+            p.setPen(QPen(QColor(255, 255, 255, 180), 1))
+            y_cur = int(to_y(self._z))
+            p.drawLine(0, y_cur, w, y_cur)
 
         p.end()
 
@@ -772,9 +880,9 @@ class SettingsDialog(QDialog):
 class MainWindow(QMainWindow):
     """Main application window containing the live video panel, telemetry sidebar, menus, and keyboard handling."""
 
-    PANEL_WIDTH = 185
+    PANEL_WIDTH = 215
     WINDOW_WIDTH = IMAGE_WIDTH * IMAGE_SCALING_FACTOR + PANEL_WIDTH
-    WINDOW_HEIGHT = IMAGE_HEIGHT * IMAGE_SCALING_FACTOR
+    WINDOW_HEIGHT = IMAGE_HEIGHT * IMAGE_SCALING_FACTOR + 100  # add menu + toolbar + status bar
 
     def __init__(self):
         super().__init__()
@@ -811,12 +919,20 @@ class MainWindow(QMainWindow):
 
         self._show_attitude = True
         self._show_position_trace = True
+        self._vbat_warn_state = "none"  # "none" | "warn" | "crit"
+        self._flight_state_name = "IDLE"
+        self._app_connected = False
+        self._reconnect_dots = 0
+        self._reconnect_timer = QTimer()
+        self._reconnect_timer.setInterval(600)
+        self._reconnect_timer.timeout.connect(self._tick_reconnect)
 
         # Menu bar setup
         self._setup_menus()
 
-        # UI Layout setup
+        # UI Layout setup (creates self._sim_badge, self._altitude_bar, etc.)
         self._setup_ui()
+        self._setup_toolbar()
 
     def _setup_menus(self):
         menu_bar = self.menuBar()
@@ -873,21 +989,105 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
+        # Video panel — QGridLayout so sim badge can overlay top-right corner
         video_panel = QFrame()
-        video_layout = QVBoxLayout(video_panel)
-        video_layout.setContentsMargins(0, 0, 0, 0)
-        video_layout.setSpacing(0)
+        video_grid = QGridLayout(video_panel)
+        video_grid.setContentsMargins(0, 0, 0, 0)
+        video_grid.setSpacing(0)
+
         self.video_label = QLabel("📷  Waiting for video stream...")
         self.video_label.setAlignment(Qt.AlignCenter)
         self.video_label.setStyleSheet("color: #666; font-size: 13px;")
         self.video_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        video_layout.addWidget(self.video_label)
+        video_grid.addWidget(self.video_label, 0, 0)
+
         main_layout.addWidget(video_panel, 1)
         main_layout.addWidget(self._setup_sidebar())
 
         hints = QLabel("Space: Take off/Land  Esc: Emergency  ↑↓←→: Move  A/D: Yaw  W/S: Alt  T: Tracking")
         hints.setStyleSheet("color: #777; font-size: 9px; padding-right: 6px;")
         self.statusBar().addPermanentWidget(hints)
+
+    def _setup_toolbar(self) -> None:
+        tb = QToolBar("Controls")
+        tb.setMovable(False)
+        tb.setFloatable(False)
+        tb.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.addToolBar(tb)
+
+        self._takeoff_land_action = QAction("▲  Take Off", self)
+        self._takeoff_land_action.setToolTip("Take off / Land (Space)")
+        self._takeoff_land_action.triggered.connect(self._on_toolbar_takeoff_land)
+        tb.addAction(self._takeoff_land_action)
+
+        self._stop_action = QAction("■  Stop", self)
+        self._stop_action.setToolTip("Emergency stop (Esc)")
+        self._stop_action.triggered.connect(lambda: self._publish_command(KeyCode.ESC, True))
+        tb.addAction(self._stop_action)
+
+        tb.addSeparator()
+
+        self._stabilise_action = QAction("◻  Hold", self)
+        self._stabilise_action.setToolTip("Stop all movement — hold current position and altitude (C)")
+        self._stabilise_action.triggered.connect(
+            lambda: (
+                self._publish_command(KeyCode.C, True),
+                self._publish_command(KeyCode.C, False),
+            )
+        )
+        tb.addAction(self._stabilise_action)
+
+        self._tracking_action = QAction("⊕  Track", self)
+        self._tracking_action.setCheckable(True)
+        self._tracking_action.setToolTip("Toggle hand-tracking mode (T)")
+        self._tracking_action.triggered.connect(
+            lambda: (
+                self._publish_command(KeyCode.T, True),
+                self._publish_command(KeyCode.T, False),
+            )
+        )
+        tb.addAction(self._tracking_action)
+
+        tb.addSeparator()
+
+        self._proc_images_action = QAction("👁  Process", self)
+        self._proc_images_action.setCheckable(True)
+        self._proc_images_action.setChecked(
+            self.image_receiver.blackboard_read(self.blackboard_reader, "process_images")
+        )
+        self._proc_images_action.setToolTip("Process images / gesture recognition (Ctrl+P)")
+        self._proc_images_action.toggled.connect(lambda checked: self._on_toggle_blackboard("process_images", checked))
+        tb.addAction(self._proc_images_action)
+
+        self._save_images_tb_action = QAction("💾  Save", self)
+        self._save_images_tb_action.setCheckable(True)
+        self._save_images_tb_action.setChecked(
+            self.image_receiver.blackboard_read(self.blackboard_reader, "save_images")
+        )
+        self._save_images_tb_action.setToolTip("Save camera frames to disk (Ctrl+S)")
+        self._save_images_tb_action.toggled.connect(lambda checked: self._on_toggle_blackboard("save_images", checked))
+        tb.addAction(self._save_images_tb_action)
+
+        # Keep toolbar actions in sync with menu actions
+        self.process_images_action.toggled.connect(self._proc_images_action.setChecked)
+        self._proc_images_action.toggled.connect(self.process_images_action.setChecked)
+        self.save_images_action.toggled.connect(self._save_images_tb_action.setChecked)
+        self._save_images_tb_action.toggled.connect(self.save_images_action.setChecked)
+
+    def _update_toolbar_state(self) -> None:
+        state = self._flight_state_name
+        connected = self._app_connected
+        airborne = state in ("AIRBORNE", "TRACKING")
+        can_takeoff = connected and state == "IDLE"
+        can_land = connected and airborne
+        self._takeoff_land_action.setEnabled(can_takeoff or can_land)
+        self._stop_action.setEnabled(connected)
+        self._stabilise_action.setEnabled(connected and airborne)
+        self._tracking_action.setEnabled(connected and airborne)
+
+    def _on_toolbar_takeoff_land(self) -> None:
+        self._publish_command(KeyCode.SPACE, True)
+        self._publish_command(KeyCode.SPACE, False)
 
     def _setup_sidebar(self) -> QFrame:
         tele_panel = QFrame()
@@ -1012,13 +1212,20 @@ class MainWindow(QMainWindow):
         stop_btn.clicked.connect(lambda: self._publish_command(KeyCode.ESC, True))
         nl.addWidget(stop_btn)
 
-        att_hdr = QLabel("ATTITUDE")
+        att_hdr = QLabel("ATTITUDE / ALTITUDE")
         att_hdr.setFont(QFont("Outfit", 9, QFont.Weight.Bold))
         att_hdr.setStyleSheet("color: #999; padding-top: 6px;")
         nl.addWidget(att_hdr)
+        att_row = QWidget()
+        att_hl = QHBoxLayout(att_row)
+        att_hl.setContentsMargins(0, 0, 0, 0)
+        att_hl.setSpacing(4)
         self.attitude_widget = AttitudeIndicator()
         self.attitude_widget.setVisible(self._show_attitude)
-        nl.addWidget(self.attitude_widget)
+        att_hl.addWidget(self.attitude_widget)
+        self._altitude_bar = AltitudeBar()
+        att_hl.addWidget(self._altitude_bar)
+        nl.addWidget(att_row)
 
         trace_hdr = QLabel("POSITION TRACE")
         trace_hdr.setFont(QFont("Outfit", 9, QFont.Weight.Bold))
@@ -1044,6 +1251,7 @@ class MainWindow(QMainWindow):
         tabs = QTabWidget()
         tabs.setDocumentMode(True)
         tabs.tabBar().setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        tabs.tabBar().setExpanding(False)
         tabs.addTab(_scrollable(flight_w), "Flight")
         tabs.addTab(_scrollable(nav_w), "Nav")
         tabs.addTab(_scrollable(vision_w), "Vision")
@@ -1071,7 +1279,21 @@ class MainWindow(QMainWindow):
 
     @Slot(str)
     def _on_status_changed(self, text: str):
-        self.statusBar().showMessage(text)
+        is_reconnecting = text.startswith(APP_STATUS_TEXT[AppStatus.RECONNECTING])
+        self._app_connected = text.startswith(APP_STATUS_TEXT[AppStatus.CONNECTED]) or text.startswith(
+            APP_STATUS_TEXT[AppStatus.SIMULATING]
+        )
+
+        if is_reconnecting:
+            if not self._reconnect_timer.isActive():
+                self._reconnect_dots = 0
+                self._reconnect_timer.start()
+        else:
+            self._reconnect_timer.stop()
+            self.statusBar().showMessage(text)
+
+        self._update_toolbar_state()
+
         for _, name in APP_STATUS_TEXT.items():
             if text.startswith(name):
                 self.setWindowTitle(f"Crazyflie GS — {name}")
@@ -1079,6 +1301,10 @@ class MainWindow(QMainWindow):
         if text.startswith(APP_STATUS_TEXT[AppStatus.DISCONNECTED]):
             self.video_label.clear()
             self.video_label.setText("📷  Waiting for video stream...")
+
+    def _tick_reconnect(self) -> None:
+        self._reconnect_dots = (self._reconnect_dots + 1) % 4
+        self.statusBar().showMessage(f"Reconnecting{'.' * self._reconnect_dots}")
 
     @Slot(dict)
     def _on_telemetry_updated(self, data: dict):
@@ -1118,18 +1344,23 @@ class MainWindow(QMainWindow):
 
         if live:
             x, y = data.get("x", 0.0), data.get("y", 0.0)
+            z, yaw = data.get("z", 0.0), data.get("yaw", 0.0)
             roll, pitch = data.get("roll", 0.0), data.get("pitch", 0.0)
             _set("x", f"{x:+.2f}")
             _set("y", f"{y:+.2f}")
-            _set("z", f"{data.get('z', 0.0):+.2f}")
+            _set("z", f"{z:+.2f}")
             _set("vx", f"{data.get('vx', 0.0):+.2f}")
             _set("vy", f"{data.get('vy', 0.0):+.2f}")
             _set("vz", f"{data.get('vz', 0.0):+.2f}")
             _set("roll", f"{roll:+.1f}°")
             _set("pitch", f"{pitch:+.1f}°")
-            _set("yaw", f"{data.get('yaw', 0.0):+.1f}°")
+            _set("yaw", f"{yaw:+.1f}°")
             self.attitude_widget.update_attitude(roll, pitch)
             self.position_trace.add_point(x, y)
+            self.position_trace.update_yaw(yaw)
+            z_min = self.image_receiver.blackboard_read(self.blackboard_reader, "min_altitude")
+            z_max = self.image_receiver.blackboard_read(self.blackboard_reader, "max_altitude")
+            self._altitude_bar.update_altitude(z, z_min, z_max, live=True)
             for key in ("m1", "m2", "m3", "m4"):
                 pct = data.get(key, 0)
                 _set(key, f"{pct}%" if pct > 0 else "0%")
@@ -1150,13 +1381,14 @@ class MainWindow(QMainWindow):
                 "m4",
             ):
                 _set(key, "—")
+            self._altitude_bar.update_altitude(0.0, MIN_ALTITUDE, MAX_ALTITUDE, live=False)
 
         vbat = data.get("vbat", 0.0)
         _set("vbat", f"{vbat:.2f} V" if vbat > 0 else "—")
         if vbat > 0:
             bar_color = _battery_color(vbat)
             _color("vbat", bar_color)
-            pct = max(0, min(100, round((vbat - 3.0) / (4.2 - 3.0) * 100)))
+            pct = max(0, min(100, round((vbat - _VBAT_CRIT) / (_VBAT_MAX - _VBAT_CRIT) * 100)))
             self._battery_bar.setValue(pct)
             self._battery_bar.setStyleSheet(f"""
                 QProgressBar {{
@@ -1167,6 +1399,20 @@ class MainWindow(QMainWindow):
         else:
             _color("vbat", "")
             self._battery_bar.setValue(0)
+
+        if live and vbat > 0:
+            # Hysteresis: enter state when crossing threshold down, exit only when
+            # vbat recovers by _VBAT_HYSTERESIS above that threshold.
+            if vbat <= _VBAT_CRIT:
+                self._vbat_warn_state = "crit"
+            elif vbat >= _VBAT_CRIT + _VBAT_HYSTERESIS:
+                self._vbat_warn_state = "none"
+
+            if self._vbat_warn_state == "crit":
+                self.statusBar().showMessage(f"⚠ CRITICAL BATTERY {vbat:.2f} V — LAND NOW")
+                self.statusBar().setStyleSheet("QStatusBar { background: #991b1b; color: white; font-weight: bold; }")
+            else:
+                self.statusBar().setStyleSheet("")
 
     @Slot(object)
     def update_image(self, pixels: np.ndarray):
@@ -1214,6 +1460,7 @@ class MainWindow(QMainWindow):
     @Slot(str)
     def _on_flight_state_updated(self, state: str):
         """Update the flight-state label with a colour-coded indicator matching the current FlightState name."""
+        self._flight_state_name = state
         lbl = self._tele_labels.get("state")
         if lbl:
             color = {
@@ -1225,8 +1472,21 @@ class MainWindow(QMainWindow):
             }.get(state, "#888")
             lbl.setText(state)
             lbl.setStyleSheet(f"color: {color};")
+        # Toolbar button updates
         if state == "IDLE":
+            self._takeoff_land_action.setText("▲  Take Off")
+            self._takeoff_land_action.setEnabled(True)
             self.position_trace.clear()
+        elif state in ("AIRBORNE", "TRACKING"):
+            self._takeoff_land_action.setText("▼  Land")
+            self._takeoff_land_action.setEnabled(True)
+        elif state == "LANDING":
+            self._takeoff_land_action.setText("Landing…")
+            self._takeoff_land_action.setEnabled(False)
+        else:
+            self._takeoff_land_action.setEnabled(False)
+        self._tracking_action.setChecked(state == "TRACKING")
+        self._update_toolbar_state()
 
     @Slot(bool, str, float)
     def _on_perception_updated(self, hand_detected: bool, gesture: str, confidence: float):

@@ -203,9 +203,16 @@ void rx_task(void *parameters) {
             g_wifiConnected = true;
             break;
         case WIFI_CTRL_STATUS_CLIENT_CONNECTED:
-            g_wifiClientConnected = (wifiCtrl->data[0] == 1);
-            cpxPrintToConsole(LOG_TO_CRTP, "[INFO] WiFi client %s\n",
-                              g_wifiClientConnected ? "connected" : "disconnected");
+            if (wifiCtrl->data[0] == 1) {
+                // Delay streaming start so cflib can complete its CRTP TOC
+                // download over the shared TCP socket before GAP8 floods it.
+                vTaskDelay(pdMS_TO_TICKS(2000));
+                g_wifiClientConnected = true;
+                cpxPrintToConsole(LOG_TO_CRTP, "[INFO] WiFi client connected (streaming enabled)\n");
+            } else {
+                g_wifiClientConnected = false;
+                cpxPrintToConsole(LOG_TO_CRTP, "[INFO] WiFi client disconnected\n");
+            }
             break;
         default:
             break;

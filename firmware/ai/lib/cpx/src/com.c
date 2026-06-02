@@ -198,11 +198,17 @@ void com_task(void *parameters) {
         // Check if we have a package to send (all 0 otherwise)
         if (tx_buff.len > 0) {
             set_gap8_rtt_pin(&gap8_rtt_dev, GPIO_HIGH);
-            // Check if Nina RTT was set at the same time, if not wait
+            // Check if Nina RTT was set at the same time, if not wait with timeout
             if ((evBits & NINA_RTT_BIT) == 0) {
                 DEBUG_PRINTF("Waiting for Nina RTT\n");
-                xEventGroupWaitBits(evGroup, NINA_RTT_BIT, pdTRUE, pdFALSE,
-                                    (TickType_t)portMAX_DELAY);
+                EventBits_t rttBits = xEventGroupWaitBits(evGroup, NINA_RTT_BIT, pdTRUE, pdFALSE,
+                                                          (TickType_t)pdMS_TO_TICKS(1000));
+                if ((rttBits & NINA_RTT_BIT) == 0) {
+                    // ESP32 not responding — release RTT and skip this packet
+                    DEBUG_PRINTF("Nina RTT timeout, dropping packet\n");
+                    set_gap8_rtt_pin(&gap8_rtt_dev, GPIO_LOW);
+                    continue;
+                }
             } else {
                 DEBUG_PRINTF("Nina RTT already high\n");
             }
@@ -308,8 +314,10 @@ void com_read(packet_t *p) { xQueueReceive(rxq, p, (TickType_t)portMAX_DELAY); }
 
 void com_write(packet_t *p) {
     start = xTaskGetTickCount();
-    // printf("Will queue up packet\n");
-    xQueueSend(txq, p, (TickType_t)portMAX_DELAY);
-    // printf("Have queued up packet!\n");
+    // Drop packet rather than block forever if ESP32 is not consuming (e.g. WiFi client disconnect)
+    if (xQueueSend(txq, p, (TickType_t)pdMS_TO_TICKS(500)) != pdPASS) {
+        DEBUG_PRINTF("com_write: TX queue full, dropping packet\n");
+        return;
+    }
     xEventGroupSetBits(evGroup, TX_QUEUE_BIT);
 }

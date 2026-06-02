@@ -27,6 +27,7 @@ from client.common.constants import (
     IMAGE_HEIGHT,
     IMAGE_SIZE,
     IMAGE_WIDTH,
+    MOTOR_TEST_DURATION,
     AppStatus,
     EventId,
     FlightCommand,
@@ -406,8 +407,8 @@ class WifiNode(Node):
     def _action_loop(self) -> None:
         """Consume FlightCommand events and drive the CF commander at ~20 Hz.
 
-        Sends unlock/hover setpoints when flying, motor-test setpoints when testing,
-        and keep-alive zero-setpoints while grounded to prevent EKF drift.
+        Sends unlock/hover setpoints when flying and motor-test setpoints when testing.
+        Nothing is sent while grounded — zero-setpoints confuse the Kalman filter on the ground.
         """
         self.logger.info("Action loop started")
         flying = False
@@ -426,13 +427,20 @@ class WifiNode(Node):
                 continue
 
             if event_id is not None and event_id == self.action_port.event:
-                try:
-                    sample = self.action_port.subscriber.receive()
-                except Exception as e:
-                    self.logger.warning(f"Action receive error: {e}")
-                    sample = None
+                # Drain ALL queued samples in FIFO order.
+                # iceoryx2 may coalesce two rapid notifications (MOTOR_TESTING + IDLE)
+                # into one; reading only the latest sample would miss the intermediate
+                # MOTOR_TEST command. Processing every sample in order ensures no
+                # command is silently dropped.
+                while True:
+                    try:
+                        sample = self.action_port.subscriber.receive()
+                    except Exception as e:
+                        self.logger.warning(f"Action receive error: {e}")
+                        break
+                    if sample is None:
+                        break
 
-                if sample is not None:
                     action = sample.payload().contents
                     command = FlightCommand(action.command)
                     flight_state = FlightState(action.state)
@@ -440,7 +448,7 @@ class WifiNode(Node):
                     hover[1] = action.vy
                     hover[2] = action.yawrate
                     hover[3] = action.zdistance
-                    motor_test_thrust = action.thrust
+                    _raw_thrust = action.thrust
                     del action, sample
 
                     match command:
@@ -476,7 +484,8 @@ class WifiNode(Node):
                             hover[0] = hover[1] = hover[2] = 0.0
 
                         case FlightCommand.MOTOR_TEST:
-                            self.logger.info("Motor test — spinning motors")
+                            motor_test_thrust = _raw_thrust
+                            self.logger.info(f"Motor test — spinning at thrust {motor_test_thrust}")
 
             # In sim: sync state for _update_sim_drone_state, skip CF commander calls
             if self._sim:
@@ -503,17 +512,22 @@ class WifiNode(Node):
                     except Exception as e:
                         self.logger.warning(f"Hover send error: {e}")
             elif flight_state == FlightState.MOTOR_TESTING:
-                # Motor test: spin at low thrust — visible but won't lift
                 try:
                     self.cf.commander.send_setpoint(0, 0, 0, motor_test_thrust)
                 except Exception as e:
                     self.logger.warning(f"Motor test send error: {e}")
             else:
-                # Keep commander alive while grounded — prevents EKF drift between flights
+                # Keep commander alive while grounded so motor test works on
+                # repeated M presses. Zero-thrust setpoints prevent commander
+                # lock (SUP:Locked) between tests. ESTKALMAN resets on ground
+                # are harmless — drone is not flying.
                 try:
                     self.cf.commander.send_setpoint(0, 0, 0, 0)
                 except Exception as e:
                     self.logger.warning(f"Keep-alive error: {e}")
+            # While grounded: send nothing. Sending zero-setpoints while grounded
+            # feeds the Kalman filter with noisy "flying" data and causes ESTKALMAN
+            # resets. The _UNLOCK_PACKETS sequence on TAKEOFF re-arms the commander.
 
             time.sleep(_LOOP_INTERVAL)
 
@@ -768,7 +782,7 @@ class WifiNode(Node):
 
         while self.running and not self.cf.is_connected():
             self._cf_connected.clear()
-            if self._cf_connected.wait(timeout=10.0):
+            if self._cf_connected.wait(timeout=20.0):
                 if self.cf.is_connected():
                     break
             if not self.cf.is_connected():

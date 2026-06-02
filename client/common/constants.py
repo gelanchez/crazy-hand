@@ -128,8 +128,8 @@ LAND_RATE = 0.2  # m/s controlled descent rate
 LAND_CUTOFF = 0.05  # m — cut motors below this height
 MAX_ALTITUDE = 2.0  # m ceiling for manual altitude control
 MIN_ALTITUDE = 0.1  # m floor for manual altitude control
-MOTOR_TEST_THRUST = 12000  # raw thrust for ground motor test (~18% — spins visibly, won't lift)
-MOTOR_TEST_DURATION = 0.5  # seconds to run motor test
+MOTOR_TEST_THRUST = 15000  # raw thrust for ground motor test
+MOTOR_TEST_DURATION = 1.0  # seconds to run motor test (150ms unlock + ~850ms spin)
 
 # Vision / gesture recognition
 GESTURE_MIN_CONFIDENCE = 0.3  # MediaPipe hand detection / presence / tracking
