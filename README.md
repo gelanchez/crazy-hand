@@ -2,7 +2,7 @@
 
 Ground station for gesture-controlled flight of a [Crazyflie 2.1](https://www.bitcraze.io/products/crazyflie-2-1/) equipped with an [AI-deck](https://www.bitcraze.io/products/ai-deck/).
 
-The AI-deck's GAP8 processor captures a 324×244 grayscale camera feed and streams it over WiFi to the ground station, where [MediaPipe](https://ai.google.dev/edge/mediapipe/solutions/vision/gesture_recognizer) classifies hand gestures in real time. Recognised gestures trigger flight commands; hand position drives lateral, altitude, and distance tracking. Telemetry is logged to [QuestDB](https://questdb.com) and visualised in [Grafana](https://grafana.com).
+The AI-deck's GAP8 processor captures a 324×244 grayscale camera feed and streams it over WiFi to the ground station, where [MediaPipe](https://ai.google.dev/edge/mediapipe/solutions/vision/gesture_recognizer) classifies hand gestures in real time. Recognised gestures trigger flight commands; hand position drives lateral, altitude, and distance tracking. Telemetry is logged to [InfluxDB 3 Core](https://docs.influxdata.com/influxdb3/core/) and visualised in [Grafana](https://grafana.com).
 
 The ground station is a multi-process Python application. Nodes communicate via [iceoryx2](https://github.com/eclipse-iceoryx/iceoryx2) shared-memory IPC — zero-copy pub/sub for high-throughput data (images, telemetry) and a typed blackboard for live runtime configuration.
 
@@ -33,7 +33,7 @@ The ground station is a multi-process Python application. Nodes communicate via 
 - [Python 3](https://www.python.org/downloads/)
 - [Docker](https://docs.docker.com/engine/install/ubuntu/)
 - [Grafana](https://grafana.com/oss/grafana/)
-- [QuestDB](https://questdb.com/docs/getting-started/quick-start/)
+- [InfluxDB 3 Core](https://docs.influxdata.com/influxdb3/core/install/)
 - Build tools (make, gcc, etc).
 
 ### Python environment
@@ -71,26 +71,44 @@ Open [Grafana server](https://grafana.com/docs/grafana/latest/setup-grafana/sign
 
 Grafana UI: <http://localhost:3000>
 
-To connect QuestDB as a datasource: **Connections → Data sources → Add → QuestDB**, set host `127.0.0.1:8812`, user `admin`, password `quest`. The client writes to three tables: `telemetry_cf`, `action_cf`, `perception_cf`.
+To connect InfluxDB 3 as a datasource:
 
-### QuestDB
+1. **Connections → Data sources → Add → InfluxDB**
+2. Set **Query language**: `InfluxQL`
+3. Set **URL**: `http://localhost:8181`
+4. Set **Database**: `crazyflie`
+5. Set **HTTP Method**: `GET`
+6. Under **Custom HTTP Headers**, add header `Authorization` with value `Bearer <your_token>` (token from `.env`)
+7. Click **Save & test**
 
-[QuestDB](https://questdb.com/docs/getting-started/quick-start/) is an open source time-series database engineered for low latency.
+Import the dashboard: **Dashboards → Import → Upload JSON** → select `grafana/dashboard-influxdb3.json`. The client writes to three tables: `telemetry`, `action`, `perception`.
 
-Start QuestDB:
+### InfluxDB 3 Core
+
+[InfluxDB 3 Core](https://docs.influxdata.com/influxdb3/core/install/) is an open-source time-series database (MIT licence). Install:
 
 ```bash
-# Local folder installation
-cd path_to_QuestDB/bin
-# cd ~/apps/questdb-9.3.5-rt-linux-x86-64/bin
-./questdb.sh start
-
-# Docker image:
-docker run -p 9000:9000 -p 8812:8812 -p 9003:9003 questdb/questdb:9.3.5
+curl -O https://www.influxdata.com/d/install_influxdb3.sh && sh install_influxdb3.sh
 ```
 
-QuestDB UI:
-<http://localhost:9000>
+`main.py` starts InfluxDB 3 automatically on launch. To start manually:
+
+```bash
+INFLUXDB3_NODE_ID=bender-node influxdb3 serve --node-id-from-env=INFLUXDB3_NODE_ID \
+  --object-store=file \
+  --data-dir ~/.influxdb \
+  > ~/.influxdb/logs/server.log 2>&1 &
+```
+
+Create an admin token on first run and store it in `.env`:
+
+```bash
+influxdb3 create token --admin
+# copy token into .env as:
+# INFLUXDB3_TOKEN=apiv3_...
+```
+
+InfluxDB 3 API: <http://localhost:8181>
 
 ## COMPILE FIRMWARE AND FLASH
 

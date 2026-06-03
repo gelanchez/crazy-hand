@@ -1,4 +1,4 @@
-"""Logs images, telemetry, actions, and perception data to disk and QuestDB."""
+"""Logs images, telemetry, actions, and perception data to disk and InfluxDB 3 Core."""
 import logging
 import queue
 import sys
@@ -26,7 +26,7 @@ from client.common.constants import (
 )
 from client.common.database import (
     ActionSample,
-    Database,
+    InfluxDB3Database,
     PerceptionSample,
     TelemetrySample,
 )
@@ -43,7 +43,7 @@ class LoggerNode(Node):
 
     def __init__(self, level=logging.INFO):
         super().__init__(NODE_NAME, level=level)
-        self.database = Database()
+        self.database = InfluxDB3Database()
         # Background thread for non-blocking image saves
         self._save_queue: queue.Queue = queue.Queue(maxsize=10)
         self._save_thread = threading.Thread(target=self._image_save_worker, daemon=True)

@@ -21,6 +21,7 @@ dependencies = [
     "opencv-python",
     "cfclient",
     "questdb[dataframe]",
+    "python-dotenv",
     "pandas",
     "mediapipe",
 ]

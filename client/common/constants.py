@@ -1,4 +1,5 @@
 import logging
+import os
 from enum import IntEnum, StrEnum, auto, unique
 from pathlib import Path
 
@@ -8,7 +9,7 @@ LOG_LEVELS: dict[str, tuple[int, int]] = {
     "main": (logging.INFO, logging.INFO),
     "database": (logging.INFO, logging.INFO),
     "control_node": (logging.DEBUG, logging.DEBUG),
-    "vision_node": (logging.DEBUG, logging.DEBUG),
+    "vision_node": (logging.DEBUG, logging.INFO),
     "wifi_node": (logging.DEBUG, logging.INFO),
     "gui_node": (logging.DEBUG, logging.DEBUG),
     "gui_command": (logging.DEBUG, logging.DEBUG),
@@ -19,6 +20,14 @@ LOG_LEVELS: dict[str, tuple[int, int]] = {
 IOX2_CONFIG = Path(__file__).parent / "iceoryx2.toml"
 QUESTDB_SCRIPT = Path.home() / "apps/questdb-9.3.5-rt-linux-x86-64/bin/questdb.sh"
 QUESTDB_CONF = "tcp::addr=127.0.0.1:9009;"
+
+# InfluxDB 3
+INFLUXDB3_HOST = "http://127.0.0.1:8181"
+INFLUXDB3_DATABASE = "crazyflie"
+INFLUXDB3_TOKEN = os.environ.get("INFLUXDB3_TOKEN", "")
+INFLUXDB3_BINARY = Path.home() / ".influxdb/influxdb3"
+INFLUXDB3_DATA_DIR = Path.home() / ".influxdb"
+INFLUXDB3_RETENTION = "30d"
 
 # Network
 CRAZYFLIE_IP = "192.168.4.1"

@@ -1,3 +1,7 @@
+from dotenv import load_dotenv
+
+load_dotenv()  # must run before any client.common imports so constants read correct env
+
 import os
 import signal
 import subprocess
@@ -7,7 +11,7 @@ from pathlib import Path
 
 import click
 
-from client.common.database import Database
+from client.common.database import InfluxDB3Database
 from client.common.utils import cleanup_iceoryx2, setup_logging
 
 logger = setup_logging("main")
@@ -25,8 +29,8 @@ def main(sim):
     if not venv_python.exists():
         venv_python = Path(sys.executable)
 
-    Database.start_questdb()
-    Database.cleanup_old_data(24 * 30)  # 30 days
+    InfluxDB3Database.start_influxdb3()
+    # QuestDB (legacy): QuestDBDatabase.start_questdb(); QuestDBDatabase.cleanup_old_data(24 * 30)
 
     cleanup_iceoryx2()
 
