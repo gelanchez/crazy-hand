@@ -86,6 +86,7 @@ class PerceptionSample:
     gesture_name: str
     gesture_confidence: float
     hand_span: float
+    frame_id: int = 0
 
 
 Sample = Union[TelemetrySample, ActionSample, PerceptionSample]

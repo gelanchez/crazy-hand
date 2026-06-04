@@ -30,7 +30,8 @@ The ground station is a multi-process Python application. Nodes communicate via 
 
 ### Dependencies
 
-- [Python 3](https://www.python.org/downloads/)
+- [Python 3.12+](https://www.python.org/downloads/)
+- [Crazyradio PA](https://www.bitcraze.io/products/crazyradio-pa/) USB dongle
 - [Docker](https://docs.docker.com/engine/install/ubuntu/)
 - [Grafana](https://grafana.com/oss/grafana/)
 - [InfluxDB 3 Core](https://docs.influxdata.com/influxdb3/core/install/)
@@ -104,8 +105,13 @@ Create an admin token on first run and store it in `.env`:
 
 ```bash
 influxdb3 create token --admin
-# copy token into .env as:
-# INFLUXDB3_TOKEN=apiv3_...
+```
+
+Create `.env` in the project root with:
+
+```bash
+INFLUXDB3_TOKEN=apiv3_...
+INFLUXDB3_NODE_ID=your-node-id
 ```
 
 InfluxDB 3 API: <http://localhost:8181>
@@ -221,6 +227,10 @@ make flash-jtag
 make clean
 ```
 
+## CONNECT TO AI-DECK
+
+Before running the client, connect your host to the AI-deck's WiFi access point. The AI-deck broadcasts its own AP when powered on. The client connects via TCP to `192.168.4.1:5000`.
+
 ## RUN CLIENT
 
 ```bash
@@ -243,7 +253,7 @@ data/images/       # raw frames (when Save Images is enabled)
 data/processed/    # vision overlay frames (gesture landmarks, labels)
 ```
 
-Telemetry, actions, and perception events are streamed to QuestDB in real time and retained for 7 days (configurable).
+Telemetry, actions, and perception events are streamed to InfluxDB 3 in real time.
 
 ## GESTURES
 
@@ -259,7 +269,7 @@ Gesture confidence threshold, debounce, and hysteresis are tunable live in **Set
 
 ## PILOTING
 
-**Flight**
+### Flight
 
 | Key              | Action                                            |
 | ---------------- | ------------------------------------------------- |
@@ -269,7 +279,7 @@ Gesture confidence threshold, debounce, and hysteresis are tunable live in **Set
 | `C`              | Stabilise — stop lateral motion, hold altitude    |
 | `M`              | Motor test — spins briefly on ground, won't lift  |
 
-**Movement** (airborne only)
+### Movement (airborne only)
 
 | Key              | Action                                            |
 | ---------------- | ------------------------------------------------- |
@@ -281,7 +291,7 @@ Gesture confidence threshold, debounce, and hysteresis are tunable live in **Set
 | `W / S`          | Altitude up / down                                |
 | `Shift + W / S`  | Larger altitude step                              |
 
-**Application**
+### Application
 
 | Key              | Action                                            |
 | ---------------- | ------------------------------------------------- |
