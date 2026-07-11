@@ -1,4 +1,5 @@
 """ROS2-style node that connects to a Crazyflie over Wi-Fi, streams camera frames via CPX, and publishes telemetry and flight-command interfaces over iceoryx2."""
+
 import ctypes
 import logging
 import math
@@ -27,7 +28,6 @@ from client.common.constants import (
     IMAGE_HEIGHT,
     IMAGE_SIZE,
     IMAGE_WIDTH,
-    MOTOR_TEST_DURATION,
     AppStatus,
     EventId,
     FlightCommand,
@@ -45,15 +45,15 @@ _MOTOR_PWM_MAX = 65535  # Crazyflie uint16 motor PWM range
 
 # cflib log key → TelemetryData field name (float, default 0.0)
 _TELE_FLOAT_FIELDS = (
-    ("stateEstimate.x",   "x"),
-    ("stateEstimate.y",   "y"),
-    ("stateEstimate.z",   "z"),
-    ("stateEstimate.vx",  "vx"),
-    ("stateEstimate.vy",  "vy"),
-    ("stateEstimate.vz",  "vz"),
-    ("stateEstimate.roll",  "roll"),
+    ("stateEstimate.x", "x"),
+    ("stateEstimate.y", "y"),
+    ("stateEstimate.z", "z"),
+    ("stateEstimate.vx", "vx"),
+    ("stateEstimate.vy", "vy"),
+    ("stateEstimate.vz", "vz"),
+    ("stateEstimate.roll", "roll"),
     ("stateEstimate.pitch", "pitch"),
-    ("stateEstimate.yaw",   "yaw"),
+    ("stateEstimate.yaw", "yaw"),
     ("pm.vbat", "vbat"),
 )
 
@@ -185,15 +185,14 @@ class WifiNode(Node):
 
             # ping_thread raises BrokenPipeError when the socket closes before
             # the thread exits — expected during shutdown, not an error.
-            import threading as _threading
-            _orig_excepthook = _threading.excepthook
+            _orig_excepthook = threading.excepthook
 
             def _thread_excepthook(args):
                 if args.exc_type is BrokenPipeError:
                     return
                 _orig_excepthook(args)
 
-            _threading.excepthook = _thread_excepthook
+            threading.excepthook = _thread_excepthook
 
         except Exception:
             pass
@@ -299,9 +298,58 @@ class WifiNode(Node):
             sample, payload = self._loan_image_sample()
             payload.format = int(ImageFormat.JPEG if fmt == 1 else ImageFormat.RAW)
             ctypes.memmove(payload.pixels, frame_data, min(len(frame_data), IMAGE_SIZE))
+            self._log_frame_stats(frame_data, fmt)
             self._commit_image_sample(sample)
         except Exception as e:
             self.logger.error(f"Error publishing frame: {e}")
+
+    _SPLIT_LOG_INTERVAL = 50   # log full stats every N frames
+    _SPLIT_GRAD_THRESH = 20    # mean abs brightness jump → warn (excluding known calibration rows)
+    # HM01B0 outputs 3 optical-black rows + ~2 transition rows at frame start.
+    # Skip rows 0-4 to avoid false VSYNC split alarms from the OB boundary.
+    _CALIB_ROWS = 5
+
+    def _log_frame_stats(self, frame_data: bytes, fmt: int) -> None:
+        """Log pixel stats to diagnose VSYNC split. RAW only (JPEG already decoded to bytes)."""
+        if len(frame_data) < IMAGE_SIZE:
+            return
+        try:
+            arr = np.frombuffer(frame_data, dtype=np.uint8).reshape(IMAGE_HEIGHT, IMAGE_WIDTH)
+            row_means = arr.mean(axis=1)
+            diffs = np.abs(np.diff(row_means))
+
+            # Top-3 jumps excluding the calibration-row boundary (rows 0-2)
+            scene_diffs = diffs[self._CALIB_ROWS:]   # index i → boundary between row (i+CALIB_ROWS) and (i+CALIB_ROWS+1)
+            top3_idx = np.argsort(scene_diffs)[-3:][::-1]
+            top3 = [(int(i + self._CALIB_ROWS), float(scene_diffs[i])) for i in top3_idx]
+
+            splits = [(r, d) for r, d in top3 if d > self._SPLIT_GRAD_THRESH]
+            if splits:
+                detail = "  ".join(f"row{r}->{r+1} Δ={d:.1f}" for r, d in splits)
+                self.logger.warning(f"Frame #{self._frame_id}: VSYNC split candidate(s): {detail}")
+
+            # Save first frame of each session for visual inspection
+            if self._frame_id == 0:
+                import os
+                save_path = os.path.join(
+                    os.path.dirname(__file__), "../../data/images",
+                    f"debug_frame0_{int(time.time())}.png"
+                )
+                cv2.imwrite(os.path.realpath(save_path), arr)
+                self.logger.info(f"Saved debug frame #0 to {save_path}")
+
+            if self._frame_id % self._SPLIT_LOG_INTERVAL == 0:
+                top_mean = float(arr[:IMAGE_HEIGHT // 4].mean())
+                bot_mean = float(arr[3 * IMAGE_HEIGHT // 4:].mean())
+                calib_mean = float(arr[:self._CALIB_ROWS].mean())
+                t3_str = "  ".join(f"row{r}->{r+1} Δ={d:.1f}" for r, d in top3)
+                self.logger.debug(
+                    f"Frame #{self._frame_id}: calib_rows={calib_mean:.1f} "
+                    f"top_q={top_mean:.1f} bot_q={bot_mean:.1f}  "
+                    f"top3_scene_jumps=[{t3_str}]  fps={self._fps_counter.fps:.1f}"
+                )
+        except Exception:
+            pass
 
     def _image_watchdog(self) -> None:
         """Reconnect if no images arrive within _NO_IMAGE_TIMEOUT seconds.
@@ -407,8 +455,8 @@ class WifiNode(Node):
     def _action_loop(self) -> None:
         """Consume FlightCommand events and drive the CF commander at ~20 Hz.
 
-        Sends unlock/hover setpoints when flying and motor-test setpoints when testing.
-        Nothing is sent while grounded — zero-setpoints confuse the Kalman filter on the ground.
+        Sends unlock/hover setpoints when flying, motor-test setpoints when testing,
+        and keep-alive zero-thrust setpoints while grounded to prevent SUP:Locked.
         """
         self.logger.info("Action loop started")
         flying = False
@@ -525,10 +573,6 @@ class WifiNode(Node):
                     self.cf.commander.send_setpoint(0, 0, 0, 0)
                 except Exception as e:
                     self.logger.warning(f"Keep-alive error: {e}")
-            # While grounded: send nothing. Sending zero-setpoints while grounded
-            # feeds the Kalman filter with noisy "flying" data and causes ESTKALMAN
-            # resets. The _UNLOCK_PACKETS sequence on TAKEOFF re-arms the commander.
-
             time.sleep(_LOOP_INTERVAL)
 
         # Ensure motors stop on exit
@@ -700,7 +744,7 @@ class WifiNode(Node):
         """Open a bare TCP connection to the drone, hold briefly, then close.
 
         This sends WIFI_CTRL_STATUS_CLIENT_CONNECTED to GAP8 via the ESP32
-        firmware without any CPX/CRTP overhead.  GAP8's camera_task does not
+        firmware without any CPX/CRTP overhead. GAP8's camera_task does not
         stream reliably on its FIRST such notification after boot; using this
         ping as the "first connect" makes cflib's subsequent open_link() the
         reliable second notification.
@@ -917,10 +961,10 @@ class WifiNode(Node):
             self.logger.warning("LOG_DATA not received after 2s — retrying log setup")
             self._setup_log_subsystem(suffix="_r1")
 
-        # Pre-register CPX APP queue immediately.  GAP8 starts streaming
+        # Pre-register CPX APP queue immediately. GAP8 starts streaming
         # ~800 ms before cflib fires _on_connected; any APP packet that
         # arrives before the queue exists is silently dropped by cflib's
-        # CPX router.  Registering here — right after the connection is
+        # CPX router. Registering here — right after the connection is
         # confirmed — ensures no early frames are lost.
         self._prewarm_cpx_queue()
 

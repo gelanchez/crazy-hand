@@ -57,6 +57,7 @@ _ENTRIES = [
     ("max_altitude",                ctypes.c_float,  MAX_ALTITUDE),
     ("min_altitude",                ctypes.c_float,  MIN_ALTITUDE),
     # Gesture
+    ("gesture_flight_enabled",      ctypes.c_bool,   True),
     ("gesture_threshold",           ctypes.c_float,  GESTURE_THRESHOLD),
     ("gesture_debounce_ms",         ctypes.c_int32,  GESTURE_DEBOUNCE_MS),
     ("gesture_hysteresis_ms",       ctypes.c_int32,  GESTURE_HYSTERESIS_MS),

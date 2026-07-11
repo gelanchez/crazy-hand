@@ -37,6 +37,10 @@ APP_CFLAGS 		+= -DconfigUSE_TIMERS=1 -DINCLUDE_xTimerPendFunctionCall=1
 APP_CFLAGS 		+= -DQVGA_MODE # QVGA format (324x244)
 # APP_CFLAGS 		+= -DQQVGA_MODE # @ QQVGA format (164x124)
 
+# Enable fallback VSYNC split-row detection and correction (normally never
+# triggers with per-frame CMD_STOP/CMD_START; enable for regression testing).
+# APP_CFLAGS      += -DDEBUG_SPLIT_DETECT
+
 #! Choose encoding here
 # Image encoding
 APP_CFLAGS 		+= -DRAW_ENCODING

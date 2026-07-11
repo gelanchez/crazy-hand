@@ -243,10 +243,8 @@ class VisionNode(Node):
 
                 if results.gestures:
                     top = results.gestures[0][0]
-                    # Open_Palm detection is unreliable — ignore it
-                    if top.category_name != "Open_Palm":
-                        gesture_name = top.category_name
-                        confidence = float(top.score)
+                    gesture_name = top.category_name
+                    confidence = float(top.score)
 
                 # --- Stable gesture ---
                 stable_gesture = self._update_gesture(

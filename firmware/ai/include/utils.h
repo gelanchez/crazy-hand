@@ -35,6 +35,7 @@
 #define HIMAX_IMG_ORIENTATION 0x0101
 #define HIMAX_QVGA_WIN_EN 0x3010
 #define HIMAX_VSYNC_HSYNC_PIXEL_SHIFT_EN 0x1012
+#define HIMAX_AE_CTRL 0x2100
 
 typedef struct {
     uint8_t magic;

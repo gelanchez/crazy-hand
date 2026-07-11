@@ -95,6 +95,9 @@ class ControlNode(Node):
             self._last_gesture = "NONE"
             return
 
+        if not self._bb("gesture_flight_enabled", True):
+            return
+
         gesture = perception.gesture_name.rstrip(b"\x00").decode("utf-8")
 
         if gesture == self._last_gesture:

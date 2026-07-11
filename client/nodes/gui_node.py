@@ -85,6 +85,7 @@ _SHORTCUTS = {
     "Ctrl+Q": "Exit",
     "Ctrl+P": "Process images",
     "Ctrl+S": "Save images",
+    "Ctrl+G": "Gesture flight enabled (disable for gesture accuracy experiment)",
     "Ctrl+/": "Keyboard shortcuts",
 }
 
@@ -212,6 +213,7 @@ class GuiNode(Node, QThread):
         last_hand_detected = None
         last_gesture = "NONE"
         last_confidence = 0.0
+        latest_pixels = None
         while True:
             sample = self.perception_port.subscriber.receive()
             if sample is None:
@@ -221,11 +223,10 @@ class GuiNode(Node, QThread):
             last_gesture = data.contents.gesture_name.rstrip(b"\x00").decode("utf-8")
             last_confidence = float(data.contents.gesture_confidence)
             if process_images:
-                pixels = np.ctypeslib.as_array(data.contents.processed_pixels).copy()
-                del data, sample
-                self.image_received.emit(pixels)
-            else:
-                del data, sample
+                latest_pixels = np.ctypeslib.as_array(data.contents.processed_pixels).copy()
+            del data, sample
+        if latest_pixels is not None:
+            self.image_received.emit(latest_pixels)
         if last_hand_detected is not None:
             self.perception_updated.emit(last_hand_detected, last_gesture, last_confidence)
 
@@ -966,6 +967,20 @@ class MainWindow(QMainWindow):
         self.save_images_action.setToolTip("Save every incoming camera frame to disk for logging and replay.")
         self.save_images_action.toggled.connect(lambda checked: self._on_toggle_blackboard("save_images", checked))
         settings_menu.addAction(self.save_images_action)
+
+        gesture_flight_enabled = self.image_receiver.blackboard_read(self.blackboard_reader, "gesture_flight_enabled")
+        self.gesture_flight_action = QAction("Gesture flight enabled", self)
+        self.gesture_flight_action.setCheckable(True)
+        self.gesture_flight_action.setShortcut("Ctrl+G")
+        self.gesture_flight_action.setChecked(gesture_flight_enabled)
+        self.gesture_flight_action.setToolTip(
+            "Allow gesture commands (Thumb_Up/Down/Victory) to trigger flight state changes.\n"
+            "Disable during gesture accuracy experiment to prevent unintended takeoffs."
+        )
+        self.gesture_flight_action.toggled.connect(
+            lambda checked: self._on_toggle_blackboard("gesture_flight_enabled", checked)
+        )
+        settings_menu.addAction(self.gesture_flight_action)
 
         settings_menu.addSeparator()
         settings_action = QAction("Settings...", self)

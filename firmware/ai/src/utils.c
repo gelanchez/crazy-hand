@@ -91,6 +91,12 @@ int setup_camera(struct pi_device *device) {
     }
     cpxPrintToConsole(LOG_TO_CRTP, "Image orientation %d\n", reg_value);
 
+    // Leave PIXEL_SHIFT_EN at driver default (0x01). Setting it to 0 introduces
+    // 2 invalid bright columns at the right edge of every row (cols 322-323).
+    // The driver default avoids these invalid columns.
+    pi_camera_reg_get(device, HIMAX_VSYNC_HSYNC_PIXEL_SHIFT_EN, &reg_value);
+    cpxPrintToConsole(LOG_TO_CRTP, "PIXEL_SHIFT_EN %d\n", reg_value);
+
     // QVGA_MODE
 #ifdef QVGA_MODE
     set_value = 1;
