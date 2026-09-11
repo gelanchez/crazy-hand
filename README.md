@@ -1,12 +1,16 @@
 # crazy-hand
 
-Ground station for gesture-controlled flight of a [Crazyflie 2.1](https://www.bitcraze.io/products/crazyflie-2-1/) equipped with an [AI-deck](https://www.bitcraze.io/products/ai-deck/).
+Gesture-controlled flight system for a [Crazyflie 2.1](https://www.bitcraze.io/products/crazyflie-2-1/) equipped with an [AI-deck](https://www.bitcraze.io/products/ai-deck/) — custom STM32 and GAP8 firmware, plus a Python ground station.
 
 The AI-deck's GAP8 processor captures a 324×244 grayscale camera feed and streams it over WiFi to the ground station, where [MediaPipe](https://ai.google.dev/edge/mediapipe/solutions/vision/gesture_recognizer) classifies hand gestures in real time. Recognised gestures trigger flight commands; hand position drives lateral, altitude, and distance tracking. Telemetry is logged to [InfluxDB 3 Core](https://docs.influxdata.com/influxdb3/core/) and visualised in [Grafana](https://grafana.com).
 
 The ground station is a multi-process Python application. Nodes communicate via [iceoryx2](https://github.com/eclipse-iceoryx/iceoryx2) shared-memory IPC, a zero-copy pub/sub for high-throughput data (images, telemetry) and a typed blackboard for live runtime configuration.
 
+![GUI screenshot](docs/images/gui_screenshot.png)
+
 ## ARCHITECTURE
+
+![Node topology](docs/images/architecture.svg)
 
 **Pub/sub topics (iceoryx2):**
 
@@ -25,6 +29,10 @@ The ground station is a multi-process Python application. Nodes communicate via 
 | `gui_node` | `/config` | `control_node`, `vision_node`, `logger_node`     |
 
 18 typed entries (flight speed, yaw rates, altitude limits, gesture thresholds, CLAHE toggle, tracking gains). All editable live via **Settings → Settings…** without restarting nodes.
+
+**Application state machine:**
+
+![State machine](docs/images/state_machine.svg)
 
 ## INSTALLATION
 
@@ -95,7 +103,7 @@ curl -O https://www.influxdata.com/d/install_influxdb3.sh && sh install_influxdb
 `main.py` starts InfluxDB 3 automatically on launch. To start manually:
 
 ```bash
-INFLUXDB3_NODE_ID=bender-node influxdb3 serve --node-id-from-env=INFLUXDB3_NODE_ID \
+INFLUXDB3_NODE_ID=your-node-id influxdb3 serve --node-id-from-env=INFLUXDB3_NODE_ID \
   --object-store=file \
   --data-dir ~/.influxdb \
   > ~/.influxdb/logs/server.log 2>&1 &
