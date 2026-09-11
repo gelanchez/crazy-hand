@@ -1,161 +1,101 @@
 #!/usr/bin/env python3
 """
-Analyze gesture recognition accuracy from a recorded session.
+Analyze gesture recognition accuracy from labeled frames produced by
+tools/label_gesture_frames.py (one CSV per condition, or a single merged CSV).
 
 Usage:
     python tools/analyze_gesture_accuracy.py \
-        --ground-truth results/gesture_accuracy.csv \
-        --db-url http://localhost:8181 \
-        --db-name crazyflie \
+        --labels results/labels_good_1.0m.csv results/labels_good_1.5m.csv \
+                 results/labels_poor_1.0m.csv results/labels_poor_1.5m.csv \
         --output results/gesture_accuracy_results.csv
 
-Requires: pandas, matplotlib, influxdb_client (or requests for raw HTTP).
+Requires: pandas, matplotlib.
 """
 
 import argparse
 import os
-import sys
 from pathlib import Path
 
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
-import requests
-
 
 GESTURES = ["Thumb_Up", "Thumb_Down", "Victory"]
-WINDOW_MS = 300  # match window around each trial
 
 
-def query_influxdb(db_url: str, db_name: str, query: str) -> pd.DataFrame:
-    resp = requests.post(
-        f"{db_url}/api/v3/query_sql",
-        params={"db": db_name},
-        json={"q": query},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    if not data:
-        return pd.DataFrame()
-    return pd.DataFrame(data)
-
-
-def load_ground_truth(path: str) -> pd.DataFrame:
-    df = pd.read_csv(path)
-    df["start_timestamp_ms"] = pd.to_numeric(df["start_timestamp_ms"])
-    df["end_timestamp_ms"] = pd.to_numeric(df["end_timestamp_ms"])
+def load_labels(paths: list[str]) -> pd.DataFrame:
+    # keep_default_na=False: MediaPipe emits a real gesture class literally named "None"
+    # (distinct from our own "NONE" fallback for no-hand-detected) — pandas' default NA
+    # coercion would otherwise silently turn that string into a missing value.
+    frames = [pd.read_csv(p, keep_default_na=False) for p in paths]
+    df = pd.concat(frames, ignore_index=True)
+    df["match"] = df["match"].astype(bool)
+    df["system_hand_detected"] = df["system_hand_detected"].astype(bool)
     return df
 
 
-def fetch_perception(db_url: str, db_name: str, start_ms: int, end_ms: int) -> pd.DataFrame:
-    start_ns = start_ms * 1_000_000
-    end_ns = end_ms * 1_000_000
-    query = f"""
-        SELECT time, gesture_name, gesture_confidence, hand_detected
-        FROM perception
-        WHERE time >= {start_ns} AND time <= {end_ns}
-        ORDER BY time
-    """
-    return query_influxdb(db_url, db_name, query)
-
-
-def most_common_gesture(df: pd.DataFrame) -> str:
-    if df.empty or not df["hand_detected"].any():
-        return "NONE"
-    detected = df[df["hand_detected"] == True]
-    if detected.empty:
-        return "NONE"
-    return detected["gesture_name"].mode().iloc[0]
-
-
-def analyze(ground_truth: pd.DataFrame, db_url: str, db_name: str) -> pd.DataFrame:
-    rows = []
-    total = len(ground_truth)
-    for i, trial in ground_truth.iterrows():
-        if (i + 1) % 20 == 0:
-            print(f"  Processing trial {i+1}/{total}...", flush=True)
-        perception = fetch_perception(
-            db_url, db_name,
-            int(trial["start_timestamp_ms"]),
-            int(trial["end_timestamp_ms"]),
-        )
-        detected = most_common_gesture(perception)
-        rows.append({
-            "lighting": trial["lighting"],
-            "background": trial["background"],
-            "distance": trial["distance"],
-            "expected": trial["gesture"],
-            "detected": detected,
-            "correct": detected == trial["gesture"],
-            "hand_detected_any": not perception.empty and perception["hand_detected"].any(),
-            "mean_confidence": (
-                perception[perception["hand_detected"] == True]["gesture_confidence"].mean()
-                if not perception.empty else 0.0
-            ),
-        })
-    return pd.DataFrame(rows)
-
-
-def print_confusion_matrix(results: pd.DataFrame) -> None:
+def print_confusion_matrix(df: pd.DataFrame) -> None:
     classes = GESTURES + ["NONE"]
-    print("\nConfusion matrix (rows=expected, cols=detected):")
-    header = f"{'':15s}" + "".join(f"{c:15s}" for c in classes)
+    columns = classes + ["OTHER"]  # anything the system emitted outside our 3 gestures/NONE
+    print("\nConfusion matrix (rows=human label, cols=system detected; OTHER = e.g. Open_Palm, MediaPipe's own 'None' class):")
+    header = f"{'':15s}" + "".join(f"{c:15s}" for c in columns)
     print(header)
-    for exp in classes:
-        row_df = results[results["expected"] == exp]
-        row = f"{exp:15s}"
-        for det in classes:
-            count = len(row_df[row_df["detected"] == det])
+    for human in classes:
+        row_df = df[df["human_gesture"] == human]
+        row = f"{human:15s}"
+        for system in classes:
+            count = len(row_df[row_df["system_gesture"] == system])
             row += f"{count:15d}"
+        other = len(row_df[~row_df["system_gesture"].isin(classes)])
+        row += f"{other:15d}"
         print(row)
 
 
-def print_precision_recall(results: pd.DataFrame) -> None:
+def print_precision_recall(df: pd.DataFrame) -> None:
     print("\nPrecision / Recall per gesture:")
     print(f"{'Gesture':15s} {'Precision':>10s} {'Recall':>10s} {'F1':>10s} {'Support':>10s}")
     for gesture in GESTURES:
-        tp = len(results[(results["expected"] == gesture) & (results["detected"] == gesture)])
-        fp = len(results[(results["expected"] != gesture) & (results["detected"] == gesture)])
-        fn = len(results[(results["expected"] == gesture) & (results["detected"] != gesture)])
+        tp = len(df[(df["human_gesture"] == gesture) & (df["system_gesture"] == gesture)])
+        fp = len(df[(df["human_gesture"] != gesture) & (df["system_gesture"] == gesture)])
+        fn = len(df[(df["human_gesture"] == gesture) & (df["system_gesture"] != gesture)])
         precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
         recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
         f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
-        support = len(results[results["expected"] == gesture])
+        support = len(df[df["human_gesture"] == gesture])
         print(f"{gesture:15s} {precision:10.3f} {recall:10.3f} {f1:10.3f} {support:10d}")
 
 
-def print_condition_breakdown(results: pd.DataFrame) -> None:
+def print_condition_breakdown(df: pd.DataFrame) -> None:
     print("\nAccuracy by condition:")
-    for lighting in results["lighting"].unique():
-        for background in results["background"].unique():
-            for distance in results["distance"].unique():
-                subset = results[
-                    (results["lighting"] == lighting) &
-                    (results["background"] == background) &
-                    (results["distance"] == distance)
-                ]
-                acc = subset["correct"].mean()
-                det = subset["hand_detected_any"].mean()
-                print(
-                    f"  {lighting:5s} / {background:9s} / {distance:5s}: "
-                    f"accuracy={acc:.2%}  detection={det:.2%}  n={len(subset)}"
-                )
+    for condition in sorted(df["condition"].unique()):
+        subset = df[df["condition"] == condition]
+        acc = subset["match"].mean()
+        det = subset["system_hand_detected"].mean()
+        conf = subset[subset["system_hand_detected"]]["system_confidence"].mean()
+        print(
+            f"  {condition:15s}: accuracy={acc:.2%}  detection={det:.2%}  "
+            f"mean_confidence={conf:.2f}  n={len(subset)}"
+        )
 
 
-def plot_results(results: pd.DataFrame, output_dir: str) -> None:
+def plot_results(df: pd.DataFrame, output_dir: str) -> None:
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
     fig.suptitle("Gesture Recognition Accuracy")
 
     for ax, gesture in zip(axes, GESTURES):
-        subset = results[results["expected"] == gesture]
-        conditions = subset.groupby(["lighting", "background"])["correct"].mean().reset_index()
-        labels = [f"{r.lighting}/{r.background}" for _, r in conditions.iterrows()]
-        values = conditions["correct"].values
+        subset = df[df["human_gesture"] == gesture]
+        by_condition = subset.groupby("condition")["match"].agg(["mean", "count"]).reset_index()
+        labels = by_condition["condition"].tolist()
+        values = by_condition["mean"].values
+        counts = by_condition["count"].values
         ax.bar(labels, values, color=["#4caf50" if v >= 0.8 else "#f44336" for v in values])
+        # Label sample size on every bar so a 0% (or 100%) bar can't be misread as "no data"
+        # — it's a real accuracy over that many labeled trials, however few.
+        for i, (v, n) in enumerate(zip(values, counts)):
+            ax.annotate(f"n={n}", (i, v + 0.03), ha="center", fontsize=9)
         ax.set_title(gesture)
         ax.set_ylabel("Accuracy")
-        ax.set_ylim(0, 1.05)
+        ax.set_ylim(0, 1.15)
         ax.yaxis.set_major_formatter(mticker.PercentFormatter(xmax=1))
         ax.tick_params(axis="x", rotation=30)
 
@@ -167,29 +107,25 @@ def plot_results(results: pd.DataFrame, output_dir: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--ground-truth", default="results/gesture_accuracy.csv")
-    parser.add_argument("--db-url", default="http://localhost:8181")
-    parser.add_argument("--db-name", default="crazyflie")
+    parser.add_argument("--labels", nargs="+", required=True,
+                         help="One or more labeled-frame CSVs from label_gesture_frames.py")
     parser.add_argument("--output", default="results/gesture_accuracy_results.csv")
     args = parser.parse_args()
 
-    print(f"Loading ground truth from {args.ground_truth}...")
-    gt = load_ground_truth(args.ground_truth)
-    print(f"  {len(gt)} trials loaded.")
+    print(f"Loading {len(args.labels)} labeled-frame file(s)...")
+    df = load_labels(args.labels)
+    print(f"  {len(df)} labeled frames loaded across {df['condition'].nunique()} condition(s).")
 
-    print("Querying InfluxDB for perception data...")
-    results = analyze(gt, args.db_url, args.db_name)
-
-    print_confusion_matrix(results)
-    print_precision_recall(results)
-    print_condition_breakdown(results)
+    print_confusion_matrix(df)
+    print_precision_recall(df)
+    print_condition_breakdown(df)
 
     output_dir = str(Path(args.output).parent)
     Path(output_dir).mkdir(parents=True, exist_ok=True)
-    results.to_csv(args.output, index=False)
+    df.to_csv(args.output, index=False)
     print(f"\nResults saved to {args.output}")
 
-    plot_results(results, output_dir)
+    plot_results(df, output_dir)
 
 
 if __name__ == "__main__":

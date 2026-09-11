@@ -14,16 +14,22 @@ Usage:
         --session-end   "2026-06-03T10:05:00Z" \
         --output results/gesture_timing_results.csv
 
-Protocol: fly in AIRBORNE/TRACKING, show each gesture and hold until command fires,
-repeat 10x per gesture. This script processes any session that contains state changes.
+Protocol: fly in AIRBORNE/TRACKING, show each gesture (any order) and hold until command
+fires, repeat as many times per gesture as decided. This script processes any session
+that contains state changes, regardless of trial count or order.
 """
 
 import argparse
+import json
+import os
 from pathlib import Path
 
 import pandas as pd
 import matplotlib.pyplot as plt
 import requests
+from dotenv import load_dotenv
+
+load_dotenv()  # loads INFLUXDB3_TOKEN from .env, same as client/main.py
 
 
 THEORETICAL_WORST_MS = 435  # 300ms debounce + 120ms inter-frame (8.3 FPS RAW) + ~15ms inference
@@ -38,10 +44,12 @@ GESTURE_TO_COMMAND = {
 
 
 def query_influxdb(db_url: str, db_name: str, query: str) -> pd.DataFrame:
+    token = os.environ.get("INFLUXDB3_TOKEN", "")
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
     resp = requests.post(
         f"{db_url}/api/v3/query_sql",
-        params={"db": db_name},
-        json={"q": query},
+        json={"db": db_name, "q": query},
+        headers=headers,
         timeout=60,
     )
     resp.raise_for_status()
@@ -59,7 +67,7 @@ def fetch_perception(db_url: str, db_name: str, start: str, end: str) -> pd.Data
     df = query_influxdb(db_url, db_name, query)
     if df.empty:
         return df
-    df["ts_ms"] = pd.to_numeric(df["time"]) / 1_000_000
+    df["ts_ms"] = pd.to_datetime(df["time"]).astype("int64") / 1_000_000
     return df
 
 
@@ -74,7 +82,7 @@ def fetch_action(db_url: str, db_name: str, start: str, end: str) -> pd.DataFram
     df = query_influxdb(db_url, db_name, query)
     if df.empty:
         return df
-    df["ts_ms"] = pd.to_numeric(df["time"]) / 1_000_000
+    df["ts_ms"] = pd.to_datetime(df["time"]).astype("int64") / 1_000_000
     return df
 
 
@@ -109,11 +117,15 @@ def analyze(perception: pd.DataFrame, action: pd.DataFrame) -> pd.DataFrame:
         command = event["command"]
         event_ms = event["ts_ms"]
 
-        # Map state transition to expected gesture
+        # Map state transition to expected gesture. Note: LANDING is a multi-row process —
+        # control_node republishes state=LANDING/command=NONE on every frame during the
+        # physical descent, then finally state=IDLE/command=LAND once grounded (~1.4-1.6s
+        # later). We want the trigger moment (entry into LANDING), not that later completion
+        # row, so match on the state alone rather than requiring command == "LAND".
         gesture = None
         if new_state in ("AIRBORNE", "TRACKING") and command == "TAKEOFF":
             gesture = "Thumb_Up"
-        elif new_state in ("LANDING", "IDLE") and command == "LAND":
+        elif new_state == "LANDING":
             gesture = "Thumb_Down"
         elif command == "TOGGLE_TRACKING":
             gesture = "Victory"
@@ -184,10 +196,18 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--db-url", default="http://localhost:8181")
     parser.add_argument("--db-name", default="crazyflie")
-    parser.add_argument("--session-start", required=True)
-    parser.add_argument("--session-end", required=True)
+    parser.add_argument("--session-start")
+    parser.add_argument("--session-end")
+    parser.add_argument("--session-file",
+                        help="JSON from record_session.py — overrides --session-start/--session-end if given")
     parser.add_argument("--output", default="results/gesture_timing_results.csv")
     args = parser.parse_args()
+
+    if args.session_file:
+        session = json.loads(Path(args.session_file).read_text())
+        args.session_start, args.session_end = session["start"], session["end"]
+    elif not (args.session_start and args.session_end):
+        parser.error("either --session-file, or both --session-start and --session-end, are required")
 
     output_dir = str(Path(args.output).parent)
     Path(output_dir).mkdir(parents=True, exist_ok=True)
