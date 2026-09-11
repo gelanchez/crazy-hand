@@ -4,7 +4,7 @@ Ground station for gesture-controlled flight of a [Crazyflie 2.1](https://www.bi
 
 The AI-deck's GAP8 processor captures a 324×244 grayscale camera feed and streams it over WiFi to the ground station, where [MediaPipe](https://ai.google.dev/edge/mediapipe/solutions/vision/gesture_recognizer) classifies hand gestures in real time. Recognised gestures trigger flight commands; hand position drives lateral, altitude, and distance tracking. Telemetry is logged to [InfluxDB 3 Core](https://docs.influxdata.com/influxdb3/core/) and visualised in [Grafana](https://grafana.com).
 
-The ground station is a multi-process Python application. Nodes communicate via [iceoryx2](https://github.com/eclipse-iceoryx/iceoryx2) shared-memory IPC — zero-copy pub/sub for high-throughput data (images, telemetry) and a typed blackboard for live runtime configuration.
+The ground station is a multi-process Python application. Nodes communicate via [iceoryx2](https://github.com/eclipse-iceoryx/iceoryx2) shared-memory IPC, a zero-copy pub/sub for high-throughput data (images, telemetry) and a typed blackboard for live runtime configuration.
 
 ## ARCHITECTURE
 
@@ -330,4 +330,4 @@ If you get `Failed to flash: [Errno 13] Access denied (insufficient permissions)
    sudo usermod -aG plugdev $USER
    ```
 
-3. **CRITICAL**: Unplug the Crazyradio dongle from the USB port and plug it back in so that the permissions are applied to the active device node.
+3. Unplug the Crazyradio dongle from the USB port and plug it back in so that the permissions are applied to the active device node.
