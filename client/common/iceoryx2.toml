@@ -1,0 +1,27 @@
+[global]
+prefix = "iox2_"
+# root-path = "/tmp/iceoryx2"
+
+[global.service]
+directory = "services"
+creation-timeout = { secs = 0, nanos = 500_000_000 }
+
+[global.node]
+cleanup-dead-nodes-on-creation = true
+cleanup-dead-nodes-on-destruction = true
+
+[defaults.publish-subscribe]
+max-publishers = 10
+max-subscribers = 10
+max-nodes = 10
+subscriber-max-buffer-size = 5
+subscriber-max-borrowed-samples = 1
+publisher-max-loaned-samples = 1
+publisher-history-size = 0
+enable-safe-overflow = true
+unable-to-deliver-strategy = "DiscardSample"
+
+[defaults.event]
+max-listeners = 10
+max-notifiers = 10
+max-nodes = 10

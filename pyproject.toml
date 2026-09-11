@@ -1,0 +1,46 @@
+[project]
+name = "crazy-hand"
+version = "1.0.0"
+description = "Gesture-controlled Crazyflie drone — GAP8/STM32 firmware plus a Python ground station for live video, control, and telemetry over Wi-Fi via iceoryx2 IPC"
+authors = [{ name = "José Ángel Sánchez" }]
+license = "MIT"
+keywords = [
+    "crazyflie",
+    "iceoryx2",
+    "python",
+    "drone",
+    "image processing",
+    "computer vision",
+    "drone control",
+]
+dependencies = [
+    "click",
+    "iceoryx2",
+    "numpy",
+    "PySide6",
+    "cflib",
+    "opencv-python",
+    "cfclient",
+    "questdb[dataframe]",
+    "python-dotenv",
+    "pandas",
+    "mediapipe",
+]
+readme = "README.md"
+requires-python = ">=3.12"
+
+[project.optional-dependencies]
+dev = ["isort", "ruff"]
+
+[project.urls]
+Homepage = "https://github.com/gelanchez/crazy-hand"
+Repository = "https://github.com/gelanchez/crazy-hand.git"
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.format]
+preview = true
+
+[tool.setuptools.packages.find]
+include = ["client*"]

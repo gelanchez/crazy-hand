@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+#
+# make - Internal build script executed within the GAP SDK environment.
+#
+# This script sets up the GAP SDK environment variables (OpenOCD cable,
+# SDK config) and runs 'make' in the specified or current directory.
+#
+# Usage: ./make [directory] [make_args...]
+# If the first argument is a directory, it switches to it. Otherwise,
+# it defaults to '.' and passes all arguments to 'make'.
+#
+set -e
+
+
+# If first argument is a directory, use it as the build path
+if [ -d "$1" ]; then
+    BUILD_PATH="$1"
+    shift
+else
+    BUILD_PATH="."
+fi
+
+# Go to build directory
+cd "${BUILD_PATH}"
+
+# OpenOCD config used by AI-deck
+export GAPY_OPENOCD_CABLE=interface/ftdi/olimex-arm-usb-tiny-h.cfg
+
+# Load GAP SDK (THIS sets RULES_DIR, compiler paths, etc.)
+# shellcheck source=/dev/null
+source /gap_sdk/configs/ai_deck.sh
+
+# Run build
+make "$@"
+

@@ -1,0 +1,26 @@
+# Secrets
+.env
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+build/
+dist/
+*.egg-info/
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+
+# Editors / IDE
+.vscode/
+.idea/
+*.swp
+.claude/
+
+# Project-local, not published
+data/
+results/
+legacy/
+thesis/
