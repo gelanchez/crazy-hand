@@ -3,7 +3,7 @@ ifndef GAP_SDK_HOME
 endif
 
 APP             = crazyflie-control
-APP_CFLAGS 		+= -DAPP_NAME=\"CRAZYFLIE-TFM\"
+APP_CFLAGS 		+= -DAPP_NAME=\"CRAZY-HAND\"
 # io			= uart
 # io			= host
 
@@ -50,7 +50,7 @@ CONFIG_GAP_LIB_JPEG = 1
 #! Choose JPEG quality (only applies when JPEG_ENCODING is set)
 # Default is quality 50 (no flag). Valid options: JPEG_Q_0/10/20/50/90/95/100
 # Lower = smaller files, higher FPS; higher = better image quality, lower FPS
-# APP_CFLAGS		+= -DJPEG_Q_20
+# APP_CFLAGS		+= -DJPEG_Q_50
 
 # Linker flags
 APP_LDFLAGS     =

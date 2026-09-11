@@ -85,7 +85,7 @@ _SHORTCUTS = {
     "Ctrl+Q": "Exit",
     "Ctrl+P": "Process images",
     "Ctrl+S": "Save images",
-    "Ctrl+G": "Gesture flight enabled (disable for gesture accuracy experiment)",
+    "Ctrl+G": "Gesture flight enabled (disable for gesture accuracy testing)",
     "Ctrl+/": "Keyboard shortcuts",
 }
 
@@ -308,7 +308,7 @@ class GuiNode(Node, QThread):
         # Status remains WAITING until first telemetry payload arrives
 
         # TODO: Replace sleep-based polling with WaitSet once the
-        # iceoryx2 spinning bug is fixed (see GitHub issue in thesis/Iceoryx2.md).
+        # iceoryx2 spinning bug is fixed (see upstream iceoryx2 issue tracker).
         # Intended WaitSet code (3 attachments — image, telemetry, perception):
         #
         #   waitset = iceoryx2.WaitSetBuilder.new().create(iceoryx2.ServiceType.Ipc)
@@ -975,7 +975,7 @@ class MainWindow(QMainWindow):
         self.gesture_flight_action.setChecked(gesture_flight_enabled)
         self.gesture_flight_action.setToolTip(
             "Allow gesture commands (Thumb_Up/Down/Victory) to trigger flight state changes.\n"
-            "Disable during gesture accuracy experiment to prevent unintended takeoffs."
+            "Disable during gesture accuracy testing to prevent unintended takeoffs."
         )
         self.gesture_flight_action.toggled.connect(
             lambda checked: self._on_toggle_blackboard("gesture_flight_enabled", checked)

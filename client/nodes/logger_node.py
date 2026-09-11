@@ -217,7 +217,7 @@ class LoggerNode(Node):
         PROCESSED_IMAGES_PATH.mkdir(parents=True, exist_ok=True)
 
         # TODO: Replace timed_wait_one workaround with WaitSet once the
-        # iceoryx2 spinning bug is fixed (confirmed v0.9.0–v0.9.1; see thesis/Iceoryx2.md).
+        # iceoryx2 spinning bug is fixed (confirmed v0.9.0–v0.9.1).
         # Intended WaitSet code (4 attachments — image, telemetry, action, perception):
         #
         #   waitset = iceoryx2.WaitSetBuilder.new().create(iceoryx2.ServiceType.Ipc)
@@ -242,10 +242,15 @@ class LoggerNode(Node):
                 if event_id == self.image_port.event:
                     self._handle_image()
 
-                # Non-blocking drain of remaining subscribers each iteration
+                # Non-blocking drain of remaining subscribers each iteration.
+                # Perception before action: control_node reacts to a perception frame almost
+                # immediately, so both often land in the same drain batch. Draining perception
+                # first ensures it gets the earlier timestamp, matching true causal order —
+                # draining action first (as before) could stamp it earlier than the perception
+                # that caused it, producing a negative measured perception->action latency.
                 self._handle_telemetry()
-                self._handle_action()
                 self._handle_perception()
+                self._handle_action()
 
         except KeyboardInterrupt:
             pass

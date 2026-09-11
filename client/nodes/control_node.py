@@ -465,7 +465,7 @@ class ControlNode(Node):
         self.blackboard_reader = self.create_blackboard_reader("/config", CONFIG)
 
         # TODO: Replace timed_wait_one workaround with WaitSet once the
-        # iceoryx2 spinning bug is fixed (see GitHub issue in thesis/Iceoryx2.md).
+        # iceoryx2 spinning bug is fixed (see upstream iceoryx2 issue tracker).
         # Intended WaitSet code (2 attachments — command, perception):
         #
         #   waitset = iceoryx2.WaitSetBuilder.new().create(iceoryx2.ServiceType.Ipc)

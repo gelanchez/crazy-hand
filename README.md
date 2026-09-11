@@ -1,4 +1,4 @@
-# crazyflie-tfm
+# crazy-hand
 
 Ground station for gesture-controlled flight of a [Crazyflie 2.1](https://www.bitcraze.io/products/crazyflie-2-1/) equipped with an [AI-deck](https://www.bitcraze.io/products/ai-deck/).
 
@@ -129,7 +129,7 @@ git clone https://github.com/bitcraze/crazyflie-firmware.git ~/git/PUBLIC/crazyf
 Compile app firmware:
 
 ```bash
-cd app
+cd firmware/app
 make clean
 make -j
 
@@ -181,13 +181,13 @@ ai/BUILD/GAP8_V2/GCC_RISCV_FREERTOS/target.board.devices.flash.img
 
 #### Image encoding
 
-Controlled by flags in `firmware/ai/Makefile`. Default is JPEG. To switch to RAW:
+Controlled by flags in `firmware/ai/Makefile`. Default is RAW. To switch to JPEG:
 
 ```makefile
-# Comment out JPEG, uncomment RAW:
-APP_CFLAGS += -DRAW_ENCODING
-# APP_CFLAGS += -DJPEG_ENCODING
-# CONFIG_GAP_LIB_JPEG = 1
+# Comment out RAW, uncomment JPEG (CONFIG_GAP_LIB_JPEG stays on either way):
+# APP_CFLAGS += -DRAW_ENCODING
+APP_CFLAGS += -DJPEG_ENCODING
+CONFIG_GAP_LIB_JPEG = 1
 ```
 
 Then rebuild with `make rebuild`.

@@ -1,28 +1,26 @@
 # Secrets
 .env
 
-# Thesis files
-thesis/
-
-# Python venv
+# Python
 .venv/
-
-# VSCode
-.vscode/
-
-# Python cache
 __pycache__/
 *.pyc
 *.pyo
-
-data/
-
-legacy/
-.claude/
-.ruff_cache/
-.pytest_cache/
-
-# Python build artifacts
 build/
 dist/
 *.egg-info/
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+
+# Editors / IDE
+.vscode/
+.idea/
+*.swp
+.claude/
+
+# Project-local, not published
+data/
+results/
+legacy/
+thesis/

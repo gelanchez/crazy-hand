@@ -246,9 +246,10 @@ void camera_task(void *parameters) {
 #endif
         transferTime = xTaskGetTickCount() - txstart;
         frame_tx++;
-        cpxPrintToConsole(LOG_TO_CRTP,
-            "[INFO] frame #%u cap=%ums xfer=%ums\n",
-            frame_tx, captureTime, transferTime);
+        if (frame_tx % 100 == 0)
+            cpxPrintToConsole(LOG_TO_CRTP,
+                "[INFO] frame #%u cap=%ums xfer=%ums\n",
+                frame_tx, captureTime, transferTime);
     }
 }
 

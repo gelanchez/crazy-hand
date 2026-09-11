@@ -3,11 +3,9 @@
 import ctypes
 import logging
 import math
-import platform
 import queue
 import random
 import struct
-import subprocess
 import threading
 import time
 
@@ -303,14 +301,29 @@ class WifiNode(Node):
         except Exception as e:
             self.logger.error(f"Error publishing frame: {e}")
 
-    _SPLIT_LOG_INTERVAL = 50   # log full stats every N frames
     _SPLIT_GRAD_THRESH = 20    # mean abs brightness jump → warn (excluding known calibration rows)
     # HM01B0 outputs 3 optical-black rows + ~2 transition rows at frame start.
     # Skip rows 0-4 to avoid false VSYNC split alarms from the OB boundary.
     _CALIB_ROWS = 5
+    # The sensor also has an analogous readout artifact at the very last row of every
+    # frame (row IMAGE_HEIGHT-1): measured ~+20 mean-brightness jump on essentially every
+    # frame, independent of scene content or RAW/JPEG mode — not a real VSYNC tear. Exclude
+    # it the same way the top OB/transition rows are excluded, to avoid a false-positive
+    # warning (and its logging overhead) firing on every single frame.
+    _BOTTOM_ROWS = 1
+
+    # Disabled by default: this diagnostic's own synchronous cost (numpy mean/diff/argsort on
+    # every published frame) was confirmed (ch5 §5.3) to cause real frame corruption at high
+    # JPEG quality. Sampling it down to 1-in-50 frames was tried and still produced corrupted
+    # frames — Q90's capture-timing margin is apparently tight enough that even occasional,
+    # infrequent extra client-side work can tip a frame over. Re-enable only for deliberate
+    # VSYNC debugging on RAW or low/mid JPEG quality, where this has shown no measured impact.
+    DIAGNOSTICS_ENABLED = False
 
     def _log_frame_stats(self, frame_data: bytes, fmt: int) -> None:
         """Log pixel stats to diagnose VSYNC split. RAW only (JPEG already decoded to bytes)."""
+        if not self.DIAGNOSTICS_ENABLED:
+            return
         if len(frame_data) < IMAGE_SIZE:
             return
         try:
@@ -318,8 +331,9 @@ class WifiNode(Node):
             row_means = arr.mean(axis=1)
             diffs = np.abs(np.diff(row_means))
 
-            # Top-3 jumps excluding the calibration-row boundary (rows 0-2)
-            scene_diffs = diffs[self._CALIB_ROWS:]   # index i → boundary between row (i+CALIB_ROWS) and (i+CALIB_ROWS+1)
+            # Top-3 jumps excluding the calibration-row boundary (rows 0-2) and the
+            # last-row readout artifact (see _BOTTOM_ROWS above)
+            scene_diffs = diffs[self._CALIB_ROWS:-self._BOTTOM_ROWS]   # index i → boundary between row (i+CALIB_ROWS) and (i+CALIB_ROWS+1)
             top3_idx = np.argsort(scene_diffs)[-3:][::-1]
             top3 = [(int(i + self._CALIB_ROWS), float(scene_diffs[i])) for i in top3_idx]
 
@@ -338,16 +352,15 @@ class WifiNode(Node):
                 cv2.imwrite(os.path.realpath(save_path), arr)
                 self.logger.info(f"Saved debug frame #0 to {save_path}")
 
-            if self._frame_id % self._SPLIT_LOG_INTERVAL == 0:
-                top_mean = float(arr[:IMAGE_HEIGHT // 4].mean())
-                bot_mean = float(arr[3 * IMAGE_HEIGHT // 4:].mean())
-                calib_mean = float(arr[:self._CALIB_ROWS].mean())
-                t3_str = "  ".join(f"row{r}->{r+1} Δ={d:.1f}" for r, d in top3)
-                self.logger.debug(
-                    f"Frame #{self._frame_id}: calib_rows={calib_mean:.1f} "
-                    f"top_q={top_mean:.1f} bot_q={bot_mean:.1f}  "
-                    f"top3_scene_jumps=[{t3_str}]  fps={self._fps_counter.fps:.1f}"
-                )
+            top_mean = float(arr[:IMAGE_HEIGHT // 4].mean())
+            bot_mean = float(arr[3 * IMAGE_HEIGHT // 4:].mean())
+            calib_mean = float(arr[:self._CALIB_ROWS].mean())
+            t3_str = "  ".join(f"row{r}->{r+1} Δ={d:.1f}" for r, d in top3)
+            self.logger.debug(
+                f"Frame #{self._frame_id}: calib_rows={calib_mean:.1f} "
+                f"top_q={top_mean:.1f} bot_q={bot_mean:.1f}  "
+                f"top3_scene_jumps=[{t3_str}]  fps={self._fps_counter.fps:.1f}"
+            )
         except Exception:
             pass
 
@@ -382,9 +395,11 @@ class WifiNode(Node):
 
                 # Wait for drone WiFi to be reachable (important after power cycles).
                 # 60 s covers the full ESP32 boot + AP-up sequence.
+                reachable = False
                 deadline = time.time() + 60.0
                 while self.running and time.time() < deadline:
                     if WifiNode._check_connection():
+                        reachable = True
                         break
                     self.logger.info("Watchdog: waiting for drone WiFi...")
                     time.sleep(3.0)
@@ -392,7 +407,7 @@ class WifiNode(Node):
                 if not self.running:
                     return
 
-                if not WifiNode._check_connection():
+                if not reachable:
                     self.logger.warning("Drone unreachable after 60s — will retry")
                 else:
                     # _startup_link_reset: close → TCP ping → cflib reopen, triggers GAP8
@@ -763,11 +778,22 @@ class WifiNode(Node):
             pass
 
     @staticmethod
-    def _check_connection(host=CRAZYFLIE_IP):
-        """Return True if the drone host responds to a single ICMP ping within 1 second."""
-        param = "-n" if platform.system().lower() == "windows" else "-c"
-        command = ["ping", param, "1", "-W", "1", host]
-        return subprocess.call(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0
+    def _check_connection(host=CRAZYFLIE_IP, port=CRAZYFLIE_PORT):
+        """Return True if the ESP32 CPX port is accepting TCP connections.
+
+        ICMP ping responds during ESP32 reboot before the CPX stack is ready,
+        which causes _startup_link_reset() to fire too early. A TCP connect on
+        the CPX port only succeeds once the ESP32 firmware is fully up.
+        """
+        import socket as _socket
+        try:
+            s = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+            s.settimeout(1.0)
+            s.connect((host, port))
+            s.close()
+            return True
+        except OSError:
+            return False
 
     def _check_required_decks(self) -> bool:
         """Verify AI-deck and Flow2 are attached by polling params.

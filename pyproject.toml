@@ -1,5 +1,5 @@
 [project]
-name = "crazyflie-tfm"
+name = "crazy-hand"
 version = "1.0.0"
 description = "Drone ground station — live video, gesture control, and telemetry over Wi-Fi via iceoryx2 IPC"
 authors = [{ name = "José Ángel Sánchez" }]
