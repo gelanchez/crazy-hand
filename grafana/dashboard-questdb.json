@@ -1717,7 +1717,7 @@
   "tags": [
     "crazyflie",
     "drone",
-    "tfm"
+    "crazy-hand"
   ],
   "templating": {
     "list": [
@@ -1743,7 +1743,7 @@
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "Crazyflie TFM",
-  "uid": "crazyflie-tfm-v1",
+  "title": "Crazy Hand",
+  "uid": "crazy-hand-v1",
   "version": 1
 }

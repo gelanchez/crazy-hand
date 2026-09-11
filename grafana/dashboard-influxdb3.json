@@ -1780,7 +1780,7 @@
     "tags": [
         "crazyflie",
         "drone",
-        "tfm",
+        "crazy-hand",
         "influxdb3"
     ],
     "templating": {
@@ -1807,7 +1807,7 @@
     },
     "timepicker": {},
     "timezone": "browser",
-    "title": "Crazyflie TFM — InfluxDB 3",
-    "uid": "crazyflie-tfm-influxdb3",
+    "title": "Crazy Hand — InfluxDB 3",
+    "uid": "crazy-hand-influxdb3",
     "version": 1
 }
