@@ -22,7 +22,7 @@
 #define CAPTURE_DONE_BIT (1 << 0)
 
 // Warmup frames discarded on startup: 1 to discard the first misaligned frame
-// (sensor resumes at unknown position after setup_camera CMD_STOP), plus
+// (sensor resumes at unknown position after setupCamera CMD_STOP), plus
 // additional frames for AEG to settle.
 #define WARMUP_FRAMES 4
 
@@ -140,7 +140,7 @@ void camera_task(void *parameters) {
     // Allow voltage/clock to stabilise before touching the camera peripheral
     vTaskDelay(pdMS_TO_TICKS(2000));
 
-    if (setup_camera(&g_camera)) {
+    if (setupCamera(&g_camera)) {
         cpxPrintToConsole(LOG_TO_CRTP, "[ERROR] Failed to open and configure camera\n");
         return;
     }
@@ -201,7 +201,7 @@ void camera_task(void *parameters) {
             cpxPrintToConsole(LOG_TO_CRTP,
                 "[WARNING] DMA timeout (cap=%ums, ok=%u tx=%u) -- reinit\n",
                 captureTime, frame_ok, frame_tx);
-            if (setup_camera(&g_camera)) {
+            if (setupCamera(&g_camera)) {
                 cpxPrintToConsole(LOG_TO_CRTP, "[ERROR] Camera reinit failed\n");
                 vTaskDelay(pdMS_TO_TICKS(1000));
             }

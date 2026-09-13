@@ -56,7 +56,7 @@ void createImageHeaderPacket(CPXPacket_t *packet, uint32_t imgSize,
  *
  * @return 0 on success, -1 on failure.
  */
-int setup_camera(struct pi_device *device) {
+int setupCamera(struct pi_device *device) {
     cpxPrintToConsole(LOG_TO_CRTP, "Opening Himax camera\n");
 
     // Initialize camera configuration

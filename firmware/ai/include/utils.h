@@ -71,7 +71,7 @@ typedef struct {
 void createImageHeaderPacket(CPXPacket_t *packet, uint32_t imgSize,
                              ImageFormat_t imgFormat);
 
-int setup_camera(struct pi_device *device);
+int setupCamera(struct pi_device *device);
 
 void sendBufferViaCPX(CPXPacket_t *packet, uint8_t *buffer,
                       uint32_t bufferSize);
