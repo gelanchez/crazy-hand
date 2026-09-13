@@ -263,6 +263,8 @@ data/processed/    # vision overlay frames (gesture landmarks, labels)
 
 Telemetry, actions, and perception events are streamed to InfluxDB 3 in real time.
 
+Recording and analysis scripts used to capture and evaluate performance data (gesture accuracy, latency, JPEG quality, resource usage) are in `tools/`.
+
 ## GESTURES
 
 With **Process Images** enabled, MediaPipe classifies hand gestures from the live camera feed.
