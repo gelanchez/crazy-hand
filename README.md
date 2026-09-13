@@ -294,7 +294,7 @@ Gesture confidence threshold, debounce, and hysteresis are tunable live in **Set
 | `↑ / ↓`          | Forward / Backward                                |
 | `← / →`          | Strafe left / right                               |
 | `Shift + ↑↓←→`   | Fast forward / backward / strafe                  |
-| `A / D`          | Yaw right / left                                  |
+| `A / D`          | Yaw left / right                                  |
 | `Shift + A / D`  | Fast yaw                                          |
 | `W / S`          | Altitude up / down                                |
 | `Shift + W / S`  | Larger altitude step                              |
