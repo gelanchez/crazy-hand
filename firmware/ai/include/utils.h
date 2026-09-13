@@ -68,22 +68,22 @@ typedef struct {
     uint8_t data[50];
 } __attribute__((packed)) WiFiCTRLPacket_t;
 
-void createImageHeaderPacket(CPXPacket_t *packet, uint32_t imgSize,
-                             ImageFormat_t imgFormat);
+void createImageHeaderPacket(CPXPacket_t *packet, uint32_t img_size,
+                             ImageFormat_t img_format);
 
 int setupCamera(struct pi_device *device);
 
 void sendBufferViaCPX(CPXPacket_t *packet, uint8_t *buffer,
-                      uint32_t bufferSize);
+                      uint32_t buffer_size);
 
-void setupWiFi(CPXPacket_t *txPacket);
+void setupWiFi(CPXPacket_t *tx_packet);
 
-void transferJpegImage(CPXPacket_t *txPacket, uint32_t imgSize,
-                       uint8_t *jpegData, uint32_t jpegSize,
-                       uint8_t *headerData, uint32_t headerSize,
-                       uint8_t *footerData, uint32_t footerSize);
+void transferJpegImage(CPXPacket_t *tx_packet, uint32_t img_size,
+                       uint8_t *jpeg_data, uint32_t jpeg_size,
+                       uint8_t *header_data, uint32_t header_size,
+                       uint8_t *footer_data, uint32_t footer_size);
 
-void transferRawImage(CPXPacket_t *txPacket, uint32_t imgSize,
+void transferRawImage(CPXPacket_t *tx_packet, uint32_t img_size,
                       uint8_t *buff_img);
 
 #endif
