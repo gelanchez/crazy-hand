@@ -28,7 +28,7 @@ The ground station is a multi-process Python application. Nodes communicate via 
 | ---------- | --------- | ------------------------------------------------ |
 | `gui_node` | `/config` | `control_node`, `vision_node`, `logger_node`     |
 
-18 typed entries (flight speed, yaw rates, altitude limits, gesture thresholds, CLAHE toggle, tracking gains). All editable live via **Settings → Settings…** without restarting nodes.
+19 typed entries (flight speed, yaw rates, altitude limits, gesture thresholds, CLAHE toggle, tracking gains). All editable live via **Settings → Settings…** without restarting nodes.
 
 **Application state machine:**
 
