@@ -44,7 +44,7 @@ typedef struct {
     uint8_t depth;
     uint8_t format;
     uint32_t size;
-} __attribute__((packed)) img_header_t;
+} __attribute__((packed)) ImageHeader_t;
 
 typedef enum {
     RAW_FORMAT = 0,

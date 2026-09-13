@@ -35,14 +35,14 @@
  */
 void createImageHeaderPacket(CPXPacket_t *packet, uint32_t imgSize,
                              ImageFormat_t imgFormat) {
-    img_header_t *imgHeader = (img_header_t *)packet->data;
+    ImageHeader_t *imgHeader = (ImageHeader_t *)packet->data;
     imgHeader->magic = 0xBC;
     imgHeader->width = IMG_WIDTH;
     imgHeader->height = IMG_HEIGHT;
     imgHeader->depth = 1;
     imgHeader->format = imgFormat;
     imgHeader->size = imgSize;
-    packet->dataLength = sizeof(img_header_t); // As per CPX package
+    packet->dataLength = sizeof(ImageHeader_t); // As per CPX package
 }
 
 /**
