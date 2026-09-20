@@ -28,7 +28,7 @@ The ground station is a multi-process Python application. Nodes communicate via 
 | ---------- | --------- | ------------------------------------------------ |
 | `gui_node` | `/config` | `control_node`, `vision_node`, `logger_node`     |
 
-18 typed entries (flight speed, yaw rates, altitude limits, gesture thresholds, CLAHE toggle, tracking gains). All editable live via **Settings → Settings…** without restarting nodes.
+19 typed entries (flight speed, yaw rates, altitude limits, gesture thresholds, CLAHE toggle, tracking gains). All editable live via **Settings → Settings…** without restarting nodes.
 
 **Application state machine:**
 
@@ -263,6 +263,8 @@ data/processed/    # vision overlay frames (gesture landmarks, labels)
 
 Telemetry, actions, and perception events are streamed to InfluxDB 3 in real time.
 
+Recording and analysis scripts used to capture and evaluate performance data (gesture accuracy, latency, JPEG quality, resource usage) are in `tools/`.
+
 ## GESTURES
 
 With **Process Images** enabled, MediaPipe classifies hand gestures from the live camera feed.
@@ -294,7 +296,7 @@ Gesture confidence threshold, debounce, and hysteresis are tunable live in **Set
 | `↑ / ↓`          | Forward / Backward                                |
 | `← / →`          | Strafe left / right                               |
 | `Shift + ↑↓←→`   | Fast forward / backward / strafe                  |
-| `A / D`          | Yaw right / left                                  |
+| `A / D`          | Yaw left / right                                  |
 | `Shift + A / D`  | Fast yaw                                          |
 | `W / S`          | Altitude up / down                                |
 | `Shift + W / S`  | Larger altitude step                              |

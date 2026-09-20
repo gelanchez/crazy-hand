@@ -202,7 +202,8 @@ def main() -> None:
                 color=["#f44336" if r > 0 else "#4caf50" for r in df["corrupt_rate"]])
     axes[2].set_xlabel("JPEG Quality")
     axes[2].set_ylabel("Corrupt frame rate (%)")
-    axes[2].set_ylim(0, 105)
+    max_corrupt_pct = (df["corrupt_rate"].max() or 0) * 100
+    axes[2].set_ylim(0, max(max_corrupt_pct * 1.5, 2))
     axes[2].set_xlim(axes[0].get_xlim())
     axes[2].set_title("Capture reliability")
     axes[2].grid(True, alpha=0.3, axis="y")
